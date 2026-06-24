@@ -42,7 +42,7 @@ Workflow files:
 self-hosted, linux, arm64, pi5
 ```
 
-The job uses the GitHub `prod` environment, so `core-infra/terraform/github`
+The job uses the GitHub `prod` environment, so `core-infra/opentofu/github`
 can enforce required review before deployment. It does not receive broker keys or
 portfolio credentials from GitHub. Runtime secrets stay in the Pi deployment
 directory’s `.env` file.
@@ -88,7 +88,7 @@ $HOME/investments-assistant/config/nginx/certs/
 ## GitHub IaC
 
 GitHub organisation, repositories, teams, branch protections, Actions environments,
-and repository variables are managed in `core-infra/terraform/github`.
+and repository variables are managed in `core-infra/opentofu/github`.
 
 Useful repository variable:
 

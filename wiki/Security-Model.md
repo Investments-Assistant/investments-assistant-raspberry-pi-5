@@ -144,7 +144,7 @@ All secrets (API keys, database passwords) are stored in `.env` which is:
 - Listed in `.gitignore` — never committed to git
 - Mounted into the app container via `env_file: .env` in `docker-compose.yml`
 - Provided to GitHub Actions via **environment secrets** in the `dev` and `prod`
-  environments (managed by Terraform in `core-infra`)
+  environments (managed by OpenTofu in `core-infra`)
 
 **Database password**: `POSTGRES_PASSWORD` is required (not defaulted to a known string).
 Docker Compose enforces this with:
@@ -158,7 +158,7 @@ If `POSTGRES_PASSWORD` is missing, `docker compose up` fails with a clear error.
 ## SonarCloud / secret scanning
 
 GitHub's **secret scanning** and **push protection** are enabled on both repositories
-via Terraform:
+via OpenTofu:
 ```hcl
 security_and_analysis {
   secret_scanning { status = "enabled" }
