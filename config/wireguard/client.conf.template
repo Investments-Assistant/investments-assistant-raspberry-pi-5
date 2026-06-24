@@ -1,0 +1,36 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# WireGuard Client Config – Phone / Laptop
+# Import via the WireGuard app (scan QR code or import file).
+# Generate a QR code: qrencode -t ansiutf8 < this_file.conf
+# ══════════════════════════════════════════════════════════════════════════════
+
+[Interface]
+# This device's VPN IP (10.8.0.2 = phone, 10.8.0.3 = laptop, etc.)
+Address = 10.8.0.2/32
+
+# This device's private key — NEVER share this
+# Generate: wg genkey   →   derive public key: wg pubkey < <private_key>
+PrivateKey = <CLIENT_PRIVATE_KEY>
+
+# Use Pi-hole for DNS (ad blocking on this device even when roaming)
+DNS = 10.8.0.1
+
+[Peer]
+# The Pi's public key: cat /etc/wireguard/server_public.key
+PublicKey = <SERVER_PUBLIC_KEY>
+
+# Pre-shared key (extra symmetric layer): cat /etc/wireguard/preshared.key
+PresharedKey = <PRESHARED_KEY>
+
+# Your home's public IP or DDNS hostname (e.g. home.duckdns.org)
+# If your ISP gives you a dynamic IP, set up a free DDNS service.
+Endpoint = <YOUR_PUBLIC_IP_OR_DDNS>:51820
+
+# Split tunnel: only route Pi/VPN traffic through WireGuard.
+# This lets your phone use its normal internet connection for everything else
+# while still reaching the investment assistant at 10.8.0.1.
+# Change to 0.0.0.0/0,::/0 if you want ALL traffic routed through the Pi.
+AllowedIPs = 10.8.0.0/24
+
+# Keep alive through NAT routers (25s is the recommended value)
+PersistentKeepalive = 25

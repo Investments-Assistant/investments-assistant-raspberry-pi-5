@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Investment Assistant</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <!-- Sidebar -->
+  <aside id="sidebar">
+    <div class="sidebar-header">
+      <span class="logo">📈 InvestAI</span>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="section-title">Trading Mode</div>
+      <div class="mode-toggle">
+        <button id="btn-recommend" class="mode-btn active" onclick="setMode('recommend')">Recommend</button>
+        <button id="btn-auto" class="mode-btn" onclick="setMode('auto')">Auto</button>
+      </div>
+      <div id="mode-status" class="mode-status">Recommend mode — agent proposes, you confirm.</div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="section-title">Market Snapshot</div>
+      <div id="market-snapshot" class="market-snapshot">Loading…</div>
+      <button class="refresh-btn" onclick="loadSnapshot()">↻ Refresh</button>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="section-title">Quick Prompts</div>
+      <div class="quick-prompts">
+        <button onclick="sendQuick('Give me a full market overview right now.')">Market Overview</button>
+        <button onclick="sendQuick('Analyse my portfolio and suggest any rebalancing.')">Portfolio Analysis</button>
+        <button onclick="sendQuick('What are the top crypto opportunities today? Check BTC, ETH, SOL.')">Crypto Scan</button>
+        <button onclick="sendQuick('Run a buy-and-hold simulation on AAPL, MSFT, NVDA from 2022-01-01.')">Backtest</button>
+        <button onclick="sendQuick('Generate my weekly investment report for the past 7 days.')">Weekly Report</button>
+        <button onclick="sendQuick('Search for news about Federal Reserve and analyse sentiment.')">Fed News</button>
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="section-title">Recent Reports</div>
+      <div id="reports-list" class="reports-list">Loading…</div>
+    </div>
+  </aside>
+
+  <!-- Main Chat Area -->
+  <main id="main">
+    <header>
+      <button id="sidebar-toggle" onclick="toggleSidebar()">☰</button>
+      <span class="header-title">Investment Assistant</span>
+      <span id="connection-status" class="conn-status offline">Connecting…</span>
+    </header>
+
+    <div id="messages" class="messages"></div>
+
+    <div class="input-area">
+      <textarea
+        id="user-input"
+        placeholder="Ask about markets, request analysis, run simulations…"
+        rows="3"
+        onkeydown="handleKey(event)"
+      ></textarea>
+      <button id="send-btn" onclick="sendMessage()">Send ↵</button>
+    </div>
+
+    <div class="disclaimer">
+      ⚠️ For informational purposes only. Not financial advice. Always consult a qualified advisor.
+    </div>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

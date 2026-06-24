@@ -1,0 +1,123 @@
+name: End-to-End Tests
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  # ── Step 1: Unit tests ─────────────────────────────────────────────────────
+  unit-tests:
+    name: Unit Tests
+    uses: ./.github/workflows/unit-tests.yml
+    secrets: inherit
+
+  # ── Step 2: Integration tests (depends on unit tests passing) ──────────────
+  integration-tests:
+    name: Integration Tests
+    needs: unit-tests
+    uses: ./.github/workflows/integration-tests.yml
+    secrets: inherit
+
+  # ── Step 3: Merge coverage reports and final SonarCloud gate ──────────────
+  sonar-quality-gate:
+    name: SonarCloud Quality Gate (combined coverage)
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests]
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres  # NOSONAR — throwaway CI-only credential
+          POSTGRES_DB: test_investments
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: "2.3.4"
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Cache Poetry virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ hashFiles('**/poetry.lock') }}
+          restore-keys: venv-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: poetry install --no-interaction --no-root
+
+      - name: Wait for PostgreSQL
+        run: |
+          until pg_isready -h localhost -p 5432 -U postgres; do
+            echo "Waiting for PostgreSQL..."
+            sleep 2
+          done
+
+      - name: Run all tests together with combined coverage
+        env:
+          ENVIRONMENT: development
+          DATABASE_URL: "postgresql+asyncpg://postgres:postgres@localhost:5432/investments"
+          TEST_DATABASE_URL: "postgresql+asyncpg://postgres:postgres@localhost:5432/test_investments"
+        run: |
+          poetry run pytest \
+            --cov=src \
+            --cov-report=xml:coverage-combined.xml \
+            --cov-report=term-missing \
+            --junitxml=junit-e2e.xml \
+            -v
+
+      - name: Upload combined coverage
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-combined
+          path: coverage-combined.xml
+
+      - name: Upload JUnit results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-e2e
+          path: junit-e2e.xml
+
+      - name: SonarCloud Scan (combined)
+        if: env.SONAR_TOKEN != ''
+        uses: SonarSource/sonarqube-scan-action@v6.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.python.coverage.reportPaths=coverage-combined.xml
+            -Dsonar.testExecutionReportPaths=junit-e2e.xml
+
+      - name: SonarCloud Quality Gate check
+        if: env.SONAR_TOKEN != ''
+        uses: sonarsource/sonarqube-quality-gate-action@master
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

@@ -1,0 +1,121 @@
+[project]
+name = "investment-assistant"
+version = "1.0.0"
+description = "AI-powered investment assistant with real-time market data, brokerage integrations, and autonomous trading — runs fully local on a Raspberry Pi with GGUF models"
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.12,<3.15,!=3.14.1"
+authors = [{"name" = "Luís Pires", "email" = "27.investments.assistant@gmail.com"}]
+maintainers = [{"name" = "Luís Pires", "email" = "27.investments.assistant@gmail.com"}]
+keywords = ["ai", "investment", "gguf", "local-llm", "fastapi", "trading", "crypto", "stocks"]
+
+[tool.poetry]
+package-mode = false
+repository = "https://github.com/Investments-Assistant/"
+
+[tool.poetry.dependencies]
+# ── Core ──────────────────────────────────────────────────────────────────────
+python-dotenv = ">=1.0.0"
+pydantic = ">=2.0.0"
+pydantic-settings = ">=2.0.0"
+
+# ── LLM backend (local, in-process) ───────────────────────────────────────────
+# GGUF models via llama-cpp-python, CPU-optimised for Raspberry Pi 5.
+llama-cpp-python = ">=0.3.0"
+
+# MCP server — expose tools to Claude Desktop / Claude Code
+#   pip install mcp   (on your laptop, not the Pi)
+mcp = {version = ">=1.0.0", optional = true}
+
+# ── Web framework ─────────────────────────────────────────────────────────────
+fastapi = ">=0.115.0"
+uvicorn = {version = ">=0.32.0", extras = ["standard"]}
+websockets = ">=14.0"
+python-multipart = ">=0.0.12"
+jinja2 = ">=3.1.0"
+httpx = ">=0.28.0"
+aiofiles = ">=24.1.0"
+
+# ── Database ──────────────────────────────────────────────────────────────────
+sqlalchemy = {version = ">=2.0.0", extras = ["asyncio"]}
+asyncpg = ">=0.30.0"
+alembic = ">=1.14.0"
+
+# ── Scheduling ────────────────────────────────────────────────────────────────
+apscheduler = ">=3.10.0"
+
+# ── Market Data ───────────────────────────────────────────────────────────────
+yfinance = ">=0.2.50"
+pandas = ">=2.2.0"
+numpy = ">=1.26.0"
+ta = ">=0.11.0"
+feedparser = ">=6.0.11"
+newsapi-python = ">=0.2.7"
+beautifulsoup4 = ">=4.12.0"
+lxml = ">=6.1.0"
+
+# ── Brokerages ────────────────────────────────────────────────────────────────
+alpaca-py = ">=0.35.0"
+ib_insync = ">=0.9.86"
+coinbase-advanced-py = ">=1.7.0"
+python-binance = ">=1.0.19"
+
+# ── Report generation ─────────────────────────────────────────────────────────
+weasyprint = ">=65.0"
+
+[tool.poetry.extras]
+mcp              = ["mcp"]
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=8.0.0"
+pytest-asyncio = ">=0.24.0"
+pytest-cov = ">=6.0.0"
+ipykernel = ">=6.0.0"
+ruff = ">=0.8.0"
+mypy = ">=1.13.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+addopts = "-v"
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "unit: Pure unit tests with no external dependencies",
+    "integration: Integration tests requiring a live PostgreSQL database",
+]
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["src/web/static/*", "tests/*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+show_missing = true
+precision = 2
+
+[tool.coverage.xml]
+output = "coverage.xml"
+
+[tool.ruff]
+fix = true
+line-length = 100
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+force-sort-within-sections = true
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+ignore_missing_imports = true

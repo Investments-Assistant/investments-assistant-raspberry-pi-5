@@ -1,0 +1,78 @@
+name: Deploy to Pi
+
+# Runs automatically after successful end-to-end tests on main, or manually.
+#
+# Prerequisites — one-time setup on the Pi:
+#
+#   # 1. Register a self-hosted runner (do this once)
+#   mkdir -p ~/actions-runner && cd ~/actions-runner
+#   curl -o runner.tar.gz -L https://github.com/actions/runner/releases/latest/download/actions-runner-linux-arm64-*.tar.gz
+#   tar xzf runner.tar.gz
+#   ./config.sh --url https://github.com/Investments-Assistant/investments-assistant \
+#               --token <REGISTRATION_TOKEN> \
+#               --labels pi5 --name pi5-runner
+#   sudo ./svc.sh install && sudo ./svc.sh start
+#
+#   # 2. Put .env and models in the persistent deploy directory:
+#   #      $HOME/investments-assistant by default, or repository variable PI_DEPLOY_DIR
+#
+# The runner labels used below are: self-hosted, linux, arm64, pi5
+
+on:
+  workflow_run:
+    workflows: ["End-to-End Tests"]
+    types: [completed]
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy to Raspberry Pi 5
+    runs-on: [self-hosted, linux, arm64, pi5]
+    environment: prod
+    # Skip if triggered by workflow_run and that run failed
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Sync code to persistent deploy directory
+        run: |
+          DEPLOY_DIR="${PI_DEPLOY_DIR:-$HOME/investments-assistant}"
+          mkdir -p "$DEPLOY_DIR"
+          rsync -a --delete \
+            --exclude '.env' \
+            --exclude '.git/' \
+            --exclude '.mypy_cache/' \
+            --exclude '.pytest_cache/' \
+            --exclude '.ruff_cache/' \
+            --exclude '.venv/' \
+            --exclude '__pycache__/' \
+            --exclude 'config/nginx/certs/' \
+            --exclude 'models/' \
+            --exclude 'reports/' \
+            ./ "$DEPLOY_DIR/"
+          echo "DEPLOY_DIR=$DEPLOY_DIR" >> "$GITHUB_ENV"
+        env:
+          PI_DEPLOY_DIR: ${{ vars.PI_DEPLOY_DIR }}
+
+      - name: Build and deploy locally on Pi
+        run: |
+          cd "$DEPLOY_DIR"
+          bash scripts/pi_deploy.sh
+
+      - name: Smoke test
+        run: |
+          cd "$DEPLOY_DIR"
+          docker compose exec -T app python -c \
+            "import json, urllib.request; print(json.dumps(json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)), indent=2))"
+
+      - name: Print local image id
+        run: docker image inspect investment-assistant:pi --format='{{.Id}}'
