@@ -6,38 +6,49 @@ from datetime import UTC, datetime, timedelta
 
 from src.agent.utils.logger import get_logger
 from src.config import settings
+from src.tools.broker_accounts import BrokerAccountConfig
 
 logger = get_logger(__name__)
 
 
-def _configured() -> bool:
-    return bool(settings.alpaca_api_key and settings.alpaca_secret_key)
+def _config(account: BrokerAccountConfig | None) -> dict:
+    return account.config if account else {
+        "api_key": settings.alpaca_api_key,
+        "secret_key": settings.alpaca_secret_key,
+        "paper": settings.alpaca_paper,
+    }
 
 
-def _not_configured() -> dict:
+def _configured(account: BrokerAccountConfig | None = None) -> bool:
+    config = _config(account)
+    return bool(config.get("api_key") and config.get("secret_key"))
+
+
+def _not_configured(account: BrokerAccountConfig | None = None) -> dict:
     return {"broker": "alpaca", "error": "Alpaca credentials are not configured"}
 
 
-def _get_client():
+def _get_client(account: BrokerAccountConfig | None = None):
     """Lazily create Alpaca trading client."""
     from alpaca.trading.client import TradingClient
 
+    config = _config(account)
     return TradingClient(
-        api_key=settings.alpaca_api_key,
-        secret_key=settings.alpaca_secret_key,
-        paper=settings.alpaca_paper,
+        api_key=config["api_key"],
+        secret_key=config["secret_key"],
+        paper=config.get("paper", True),
     )
 
 
-def get_alpaca_account() -> dict:
-    if not _configured():
-        return _not_configured()
+def get_alpaca_account(account: BrokerAccountConfig | None = None) -> dict:
+    if not _configured(account):
+        return _not_configured(account)
     try:
-        client = _get_client()
+        client = _get_client(account)
         acc = client.get_account()
         return {
             "broker": "alpaca",
-            "paper": settings.alpaca_paper,
+            "paper": _config(account).get("paper", True),
             "status": acc.status,
             "cash": float(acc.cash),
             "buying_power": float(acc.buying_power),
@@ -51,11 +62,11 @@ def get_alpaca_account() -> dict:
         return {"broker": "alpaca", "error": str(exc)}
 
 
-def get_alpaca_positions() -> list[dict]:
-    if not _configured():
-        return [_not_configured()]
+def get_alpaca_positions(account: BrokerAccountConfig | None = None) -> list[dict]:
+    if not _configured(account):
+        return [_not_configured(account)]
     try:
-        client = _get_client()
+        client = _get_client(account)
         positions = client.get_all_positions()
         return [
             {
@@ -75,13 +86,15 @@ def get_alpaca_positions() -> list[dict]:
         return [{"error": str(exc)}]
 
 
-def get_alpaca_orders(days: int = 30) -> list[dict]:
-    if not _configured():
-        return [_not_configured()]
+def get_alpaca_orders(
+    days: int = 30, account: BrokerAccountConfig | None = None
+) -> list[dict]:
+    if not _configured(account):
+        return [_not_configured(account)]
     try:
         from alpaca.trading.requests import GetOrdersRequest
 
-        client = _get_client()
+        client = _get_client(account)
         since = datetime.now(UTC) - timedelta(days=days)
         req = GetOrdersRequest(after=since)
         orders = client.get_orders(filter=req)
@@ -113,9 +126,10 @@ def submit_alpaca_order(
     order_type: str = "market",
     limit_price: float | None = None,
     stop_price: float | None = None,
+    account: BrokerAccountConfig | None = None,
 ) -> dict:
-    if not _configured():
-        return _not_configured()
+    if not _configured(account):
+        return _not_configured(account)
     try:
         from alpaca.trading.enums import OrderSide, TimeInForce
         from alpaca.trading.requests import (
@@ -124,7 +138,7 @@ def submit_alpaca_order(
             StopLimitOrderRequest,
         )
 
-        client = _get_client()
+        client = _get_client(account)
         _side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL
 
         if order_type == "market":
@@ -172,11 +186,13 @@ def submit_alpaca_order(
         return {"success": False, "error": str(exc)}
 
 
-def cancel_alpaca_order(order_id: str) -> dict:
-    if not _configured():
-        return _not_configured()
+def cancel_alpaca_order(
+    order_id: str, account: BrokerAccountConfig | None = None
+) -> dict:
+    if not _configured(account):
+        return _not_configured(account)
     try:
-        client = _get_client()
+        client = _get_client(account)
         client.cancel_order_by_id(order_id)
         return {"success": True, "order_id": order_id}
     except Exception as exc:

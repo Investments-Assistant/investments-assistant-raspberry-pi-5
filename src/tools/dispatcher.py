@@ -20,6 +20,12 @@ from src.agent.utils.logger import get_logger
 from src.config import settings
 from src.db.database import async_session
 from src.db.models import DailyPnL, SimulationResult, Trade, User
+from src.tools.broker_accounts import (
+    BrokerAccountConfig,
+    BrokerVaultUnavailable,
+    capability_unavailable,
+    load_user_broker_accounts,
+)
 from src.tools.brokers import (
     alpaca as alpaca_tool,
     binance as binance_tool,
@@ -96,11 +102,6 @@ _SYNC_DISPATCH: dict[str, object] = {
     "get_earnings_calendar": lambda inp: get_earnings_calendar(**inp),
     "search_market_news": lambda inp: search_market_news(**inp),
     "assess_nft_risk": lambda inp: assess_nft_risk(**inp),
-    "get_portfolio_summary": lambda inp: get_portfolio_summary(broker=inp.get("broker")),
-    "get_account_info": lambda inp: get_account_info(broker=inp["broker"]),
-    "get_trade_history": lambda inp: get_trade_history(
-        broker=inp["broker"], days=inp.get("days", 30)
-    ),
 }
 
 # Async tools that can't live in _SYNC_DISPATCH (they are awaited in _dispatch)
@@ -113,6 +114,8 @@ _ASYNC_DISPATCH: dict[str, object] = {
 
 
 async def _dispatch(name: str, inp: dict) -> object:
+    if name in {"get_portfolio_summary", "get_account_info", "get_trade_history"}:
+        return await _dispatch_broker_read(name, inp)
     if name in _SYNC_DISPATCH:
         # yfinance, broker SDKs, and PDF generation are synchronous.  Keep
         # them off FastAPI's event loop so one slow network call cannot freeze
@@ -125,12 +128,114 @@ async def _dispatch(name: str, inp: dict) -> object:
     if name == "confirm_trade":
         return await _confirm_trade(inp)
     if name == "cancel_order":
-        return await asyncio.to_thread(_cancel_order, inp)
+        return await _cancel_order_for_user(inp)
     if name == "generate_report":
         return await _generate_report(inp)
     if name == "set_trading_mode":
         return await _set_trading_mode(inp["mode"])
     return {"error": f"Unknown tool: {name}"}
+
+
+async def _load_current_user_accounts(
+    broker: str | None = None,
+    account_id: str | None = None,
+) -> tuple[list[BrokerAccountConfig] | None, dict | None]:
+    """Load account configs for a user, preserving the global scheduler fallback."""
+    user_id = _tool_user_id.get()
+    if not user_id:
+        return None, None
+    try:
+        return await load_user_broker_accounts(user_id, broker=broker, account_id=account_id), None
+    except BrokerVaultUnavailable as exc:
+        logger.warning("Broker vault unavailable for user %s: %s", user_id, exc)
+        return None, {
+            "available": False,
+            "capability": "brokerage access",
+            "error": str(exc),
+        }
+    except Exception as exc:
+        logger.error("Broker account lookup failed for user %s: %s", user_id, exc)
+        return None, {
+            "available": False,
+            "capability": "brokerage access",
+            "error": "Brokerage account data is temporarily unavailable. Try again later.",
+        }
+
+
+async def _resolve_single_account(
+    broker: str,
+    account_id: str | None,
+    capability: str,
+) -> tuple[BrokerAccountConfig | None, dict | None]:
+    """Resolve one account or return a safe, actionable model-facing result."""
+    accounts, error = await _load_current_user_accounts(broker=broker, account_id=account_id)
+    if error:
+        return None, error
+    if accounts is None:
+        return None, None
+    if not accounts:
+        if account_id:
+            return None, {
+                "available": False,
+                "broker": broker,
+                "capability": capability,
+                "error": (
+                    "The requested brokerage account was not found or is inactive for this user."
+                ),
+            }
+        return None, capability_unavailable(broker, capability)
+    if len(accounts) > 1 and not account_id:
+        return None, {
+            "available": False,
+            "broker": broker,
+            "capability": capability,
+            "account_id_required": True,
+            "accounts": [account.public for account in accounts],
+            "error": (
+                f"More than one active {broker} account is configured. Ask the user to choose "
+                "an account_id from the account list before continuing."
+            ),
+        }
+    return accounts[0], None
+
+
+async def _dispatch_broker_read(name: str, inp: dict) -> object:
+    broker = str(inp.get("broker", "")).lower().strip() or None
+    account_id = str(inp.get("account_id", "")).strip() or None
+    if broker and broker not in _VALID_BROKERS:
+        return {"error": f"Unknown broker: {broker}"}
+
+    if name == "get_portfolio_summary":
+        accounts, error = await _load_current_user_accounts(broker=broker, account_id=account_id)
+        if error:
+            return error
+        if accounts is None:
+            return await asyncio.to_thread(get_portfolio_summary, broker=broker)
+        if not accounts:
+            return capability_unavailable(broker or "any", "portfolio summary")
+        return await asyncio.to_thread(
+            get_portfolio_summary,
+            broker=broker,
+            accounts=accounts,
+        )
+
+    if not broker:
+        return {"error": "broker is required for this account operation"}
+    account, error = await _resolve_single_account(
+        broker,
+        account_id,
+        "account information" if name == "get_account_info" else "trade history",
+    )
+    if error:
+        return error
+    if name == "get_account_info":
+        return await asyncio.to_thread(get_account_info, broker=broker, account=account)
+    return await asyncio.to_thread(
+        get_trade_history,
+        broker=broker,
+        days=inp.get("days", 30),
+        account=account,
+    )
 
 
 # ── Daily loss-limit helpers ─────────────────────────────────────────────────
@@ -192,11 +297,14 @@ def _validate_trade_input(inp: dict) -> tuple[dict | None, str | None]:
     side = str(inp.get("side", "")).lower().strip()
     order_type = str(inp.get("order_type", "market")).lower().strip()
     try:
-        quantity = float(inp.get("quantity"))
+        quantity = float(str(inp.get("quantity")))
     except (TypeError, ValueError):
         quantity = 0.0
     if broker not in _VALID_BROKERS:
         return None, f"Unknown broker: {broker or 'missing'}"
+    account_id = str(inp.get("account_id", "")).strip() or None
+    if account_id and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", account_id):
+        return None, "Invalid account_id"
     if not re.fullmatch(r"[A-Z0-9][A-Z0-9.\-/]{0,31}", symbol):
         return None, "Invalid symbol"
     if side not in {"buy", "sell"}:
@@ -265,13 +373,14 @@ def _validate_trade_input(inp: dict) -> tuple[dict | None, str | None]:
     estimated_notional = inp.get("estimated_notional_usd")
     if estimated_notional not in (None, ""):
         try:
-            estimated_notional = float(estimated_notional)
+            estimated_notional = float(str(estimated_notional))
         except (TypeError, ValueError):
             return None, "estimated_notional_usd must be a positive finite number"
         if not math.isfinite(estimated_notional) or estimated_notional <= 0:
             return None, "estimated_notional_usd must be a positive finite number"
     return {
         "broker": broker,
+        "account_id": account_id,
         "symbol": symbol,
         "asset_type": asset_type,
         "side": side,
@@ -295,10 +404,19 @@ def _setting_number(name: str, default: float) -> float:
         return default
 
 
-def _live_route_allowed(broker: str) -> bool:
+def _live_route_allowed(broker: str, account: BrokerAccountConfig | None = None) -> bool:
     """Allow paper/testnet routes by default; live routes need an explicit flag."""
     if bool(getattr(settings, "live_trading_enabled", False)):
         return True
+    if account is not None:
+        config = account.config
+        if broker == "alpaca":
+            return bool(config.get("paper", True))
+        if broker == "binance":
+            return bool(config.get("testnet", True))
+        if broker == "ibkr":
+            return bool(config.get("enabled", False)) and int(config.get("port", 4002)) == 4002
+        return False
     if broker == "alpaca":
         return bool(getattr(settings, "alpaca_paper", True))
     if broker == "binance":
@@ -320,7 +438,7 @@ def _auto_notional_ok(trade: dict) -> tuple[bool, str | None]:
             # Standard US equity options represent 100 underlying shares.
             raw_notional *= 100
     try:
-        notional = float(raw_notional)
+        notional = float(str(raw_notional))
     except (TypeError, ValueError):
         notional = 0.0
     # Test doubles and older external callers may not provide the new policy
@@ -374,6 +492,7 @@ async def _create_trade_intent(trade: dict, mode: str) -> str | None:
                     status="pending",
                     mode=mode,
                     user_id=_tool_user_id.get(),
+                    broker_account_id=trade.get("account_id"),
                     reason=trade.get("reason", ""),
                 )
             )
@@ -407,8 +526,12 @@ async def _finalize_trade_intent(intent_id: str, result: dict) -> bool:
         return False
 
 
-async def _execute_validated_trade(trade: dict, mode: str) -> dict:
-    if not _live_route_allowed(trade["broker"]):
+async def _execute_validated_trade(
+    trade: dict,
+    mode: str,
+    account: BrokerAccountConfig | None = None,
+) -> dict:
+    if not _live_route_allowed(trade["broker"], account):
         return {
             "blocked": True,
             "reason": (
@@ -423,8 +546,7 @@ async def _execute_validated_trade(trade: dict, mode: str) -> dict:
             "reason": "Trade audit database is unavailable; the order was not sent.",
         }
     try:
-        result = await asyncio.to_thread(
-            _route_order,
+        route_args = (
             trade["broker"],
             trade["symbol"],
             trade["side"],
@@ -437,6 +559,10 @@ async def _execute_validated_trade(trade: dict, mode: str) -> dict:
             trade.get("option_strike"),
             trade.get("option_right"),
         )
+        if account is None:
+            result = await asyncio.to_thread(_route_order, *route_args)
+        else:
+            result = await asyncio.to_thread(_route_order, *route_args, account=account)
     except Exception as exc:
         logger.exception("Broker route failed for trade intent %s", intent_id)
         result = {"error": str(exc)}
@@ -455,8 +581,16 @@ async def _execute_validated_trade(trade: dict, mode: str) -> dict:
 
 async def _execute_trade(inp: dict) -> dict:
     trade, error = _validate_trade_input(inp)
-    if error:
+    if error or trade is None:
         return {"blocked": True, "reason": error}
+
+    account, account_error = await _resolve_single_account(
+        trade["broker"],
+        trade.get("account_id"),
+        "trade execution",
+    )
+    if account_error:
+        return account_error
 
     trading_mode = _tool_trading_mode.get() or settings.trading_mode
     if trading_mode == "recommend":
@@ -493,7 +627,7 @@ async def _execute_trade(inp: dict) -> dict:
     notional_ok, notional_error = _auto_notional_ok(trade)
     if not notional_ok:
         return {"blocked": True, "reason": notional_error}
-    return await _execute_validated_trade(trade, "auto")
+    return await _execute_validated_trade(trade, "auto", account)
 
 
 async def _confirm_trade(inp: dict) -> dict:
@@ -509,7 +643,15 @@ async def _confirm_trade(inp: dict) -> dict:
     ):
         return {"blocked": True, "reason": "Confirmation belongs to another chat session."}
     _pending_trade_proposals.pop(confirmation_id, None)
-    result = await _execute_validated_trade(proposal["trade"], "manual")
+    trade = proposal["trade"]
+    account, account_error = await _resolve_single_account(
+        trade["broker"],
+        trade.get("account_id"),
+        "trade execution",
+    )
+    if account_error:
+        return account_error
+    result = await _execute_validated_trade(trade, "manual", account)
     result["confirmation_id"] = confirmation_id
     return result
 
@@ -526,12 +668,30 @@ def _route_order(
     option_expiry: str | None = None,
     option_strike: float | None = None,
     option_right: str | None = None,
+    account: BrokerAccountConfig | None = None,
 ) -> dict:
     if broker == "alpaca":
+        if account is None:
+            return alpaca_tool.submit_alpaca_order(
+                symbol, side, quantity, order_type, limit_price, stop_price
+            )
         return alpaca_tool.submit_alpaca_order(
-            symbol, side, quantity, order_type, limit_price, stop_price
+            symbol, side, quantity, order_type, limit_price, stop_price, account=account
         )
     if broker == "ibkr":
+        if account is None:
+            return ibkr_tool.submit_ibkr_order(
+                symbol,
+                side,
+                quantity,
+                order_type,
+                limit_price,
+                stop_price,
+                asset_type=asset_type,
+                option_expiry=option_expiry,
+                option_strike=option_strike,
+                option_right=option_right,
+            )
         return ibkr_tool.submit_ibkr_order(
             symbol,
             side,
@@ -543,26 +703,70 @@ def _route_order(
             option_expiry=option_expiry,
             option_strike=option_strike,
             option_right=option_right,
+            account=account,
         )
     if broker == "coinbase":
-        return coinbase.submit_coinbase_order(symbol, side, quantity, order_type, limit_price)
+        if account is None:
+            return coinbase.submit_coinbase_order(
+                symbol, side, quantity, order_type, limit_price
+            )
+        return coinbase.submit_coinbase_order(
+            symbol, side, quantity, order_type, limit_price, account=account
+        )
     if broker == "binance":
-        return binance_tool.submit_binance_order(symbol, side, quantity, order_type, limit_price)
+        if account is None:
+            return binance_tool.submit_binance_order(
+                symbol, side, quantity, order_type, limit_price
+            )
+        return binance_tool.submit_binance_order(
+            symbol, side, quantity, order_type, limit_price, account=account
+        )
     return {"error": f"Unknown broker: {broker}"}
 
 
-def _cancel_order(inp: dict) -> dict:
+def _cancel_order(inp: dict, account: BrokerAccountConfig | None = None) -> dict:
     broker = inp["broker"]
     order_id = inp["order_id"]
     if broker == "alpaca":
-        return alpaca_tool.cancel_alpaca_order(order_id)
+        return (
+            alpaca_tool.cancel_alpaca_order(order_id)
+            if account is None
+            else alpaca_tool.cancel_alpaca_order(order_id, account=account)
+        )
     if broker == "ibkr":
-        return ibkr_tool.cancel_ibkr_order(order_id)
+        return (
+            ibkr_tool.cancel_ibkr_order(order_id)
+            if account is None
+            else ibkr_tool.cancel_ibkr_order(order_id, account=account)
+        )
     if broker == "coinbase":
-        return coinbase.cancel_coinbase_order(order_id)
+        return (
+            coinbase.cancel_coinbase_order(order_id)
+            if account is None
+            else coinbase.cancel_coinbase_order(order_id, account=account)
+        )
     if broker == "binance":
-        return binance_tool.cancel_binance_order(order_id)
+        return (
+            binance_tool.cancel_binance_order(order_id)
+            if account is None
+            else binance_tool.cancel_binance_order(order_id, account=account)
+        )
     return {"error": f"Unknown broker: {broker}"}
+
+
+async def _cancel_order_for_user(inp: dict) -> dict:
+    broker = str(inp.get("broker", "")).lower().strip()
+    if broker not in _VALID_BROKERS:
+        return {"error": f"Unknown broker: {broker or 'missing'}"}
+    account, error = await _resolve_single_account(
+        broker,
+        str(inp.get("account_id", "")).strip() or None,
+        "order cancellation",
+    )
+    if error:
+        return error
+    normalized_input = {**inp, "broker": broker}
+    return await asyncio.to_thread(_cancel_order, normalized_input, account)
 
 
 async def _set_trading_mode(mode: str) -> dict:

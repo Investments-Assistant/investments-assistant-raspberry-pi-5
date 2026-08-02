@@ -23,6 +23,7 @@ from email.header import decode_header
 from html.parser import HTMLParser
 import imaplib
 import re
+from typing import Any
 
 from src.agent.utils.logger import get_logger
 from src.config import settings
@@ -87,7 +88,11 @@ def _extract_body(msg: email.message.Message) -> str:
             payload = part.get_payload(decode=True)
             if payload is None:
                 continue
-            text = payload.decode(charset, errors="replace")
+            text = (
+                payload.decode(charset, errors="replace")
+                if isinstance(payload, bytes)
+                else str(payload)
+            )
             if ct == "text/plain":
                 plain.append(text)
             elif ct == "text/html":
@@ -96,7 +101,11 @@ def _extract_body(msg: email.message.Message) -> str:
         payload = msg.get_payload(decode=True)
         charset = msg.get_content_charset() or "utf-8"
         if payload:
-            text = payload.decode(charset, errors="replace")
+            text = (
+                payload.decode(charset, errors="replace")
+                if isinstance(payload, bytes)
+                else str(payload)
+            )
             ct = msg.get_content_type()
             if ct == "text/html":
                 html.append(_strip_html(text))
@@ -144,17 +153,18 @@ async def read_and_ingest_newsletters(since_days: int = 8) -> dict:
     if conn is None:
         return {"fetched": 0, "inserted": 0}
 
-    articles = []
+    articles: list[dict[str, Any]] = []
     try:
         conn.select("INBOX")
         criteria = _build_search_criteria(since_days)
         _, msg_nums = conn.search(None, criteria)
 
-        for num in (msg_nums[0] or b"").split():
+        raw_nums = msg_nums[0] if msg_nums else b""
+        for num in (raw_nums or b"").split():
             try:
-                _, data = conn.fetch(num, "(RFC822)")
+                _, data = conn.fetch(num.decode("ascii"), "(RFC822)")
                 raw = data[0][1] if data and data[0] else None
-                if not raw:
+                if not isinstance(raw, bytes):
                     continue
                 msg = email.message_from_bytes(raw)
                 subject = _decode_header_value(msg.get("Subject", "Newsletter"))

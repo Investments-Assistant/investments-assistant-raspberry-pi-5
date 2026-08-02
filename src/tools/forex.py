@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 import yfinance as yf
 
@@ -118,7 +119,7 @@ def get_forex_data(
 def get_forex_rates(pairs: list[str] | None = None) -> dict:
     """Snapshot of current spot rates, daily change %, and pip size."""
     targets = [_normalize_pair(p) for p in pairs] if pairs else _DEFAULT_PAIRS
-    result: dict[str, object] = {
+    result: dict[str, Any] = {
         "timestamp": datetime.now(UTC).isoformat(),
         "rates": {},
     }

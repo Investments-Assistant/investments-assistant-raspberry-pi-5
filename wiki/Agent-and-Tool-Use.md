@@ -61,11 +61,18 @@ conversation left off without exposing another user's messages.
 Before every turn, the profile description and JSON preferences are refreshed from the `users`
 row and added inside a delimited context block. The model is explicitly told that this is
 user-provided context, not a command, so preferences cannot override server-side trading
-limits or confirmation requirements.
+limits or confirmation requirements. The same context contains only masked metadata for the
+authenticated user's active brokerage accounts; encrypted credentials never enter the prompt.
 
 Trading mode is part of the authenticated user context. The `set_trading_mode` tool persists
 the requesting user's mode; it no longer mutates the process-global setting used as the
 scheduler/default fallback.
+
+Broker tools are capability-aware. A user may use all market/news/simulation tools without any
+broker credentials. Portfolio/account/history/trade tools resolve that user's active accounts;
+missing access returns a structured explanation, and multiple matching accounts return a safe
+choice list with `account_id_required=true`. The dispatcher never silently falls back to the
+global environment credentials for an authenticated user.
 
 ---
 

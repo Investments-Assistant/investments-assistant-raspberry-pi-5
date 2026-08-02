@@ -61,6 +61,12 @@ async def create_all_tables() -> None:
             )
             await conn.execute(
                 text(
+                    "ALTER TABLE trades ADD COLUMN IF NOT EXISTS "
+                    "broker_account_id VARCHAR(36)"
+                )
+            )
+            await conn.execute(
+                text(
                     "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
                     "trading_mode VARCHAR(16) NOT NULL DEFAULT 'recommend'"
                 )

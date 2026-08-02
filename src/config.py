@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     auth_require_login: bool = True
     auth_cookie_secure: bool = True
     max_chat_message_chars: int = Field(8_000, ge=1_000, le=32_000)
+    # Fernet key used to encrypt per-user brokerage credentials at rest.
+    # Generate with scripts/create_broker_key.py and keep it outside the DB.
+    broker_credentials_key: str = ""
 
     # Optional, separately scoped access for the local MCP bridge.  It is off
     # by default because the browser UI is the primary control surface.

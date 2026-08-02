@@ -2,34 +2,43 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from src.agent.utils.logger import get_logger
 from src.config import settings
+from src.tools.broker_accounts import BrokerAccountConfig
 
 logger = get_logger(__name__)
 
 
-def _configured() -> bool:
-    return bool(settings.coinbase_api_key and settings.coinbase_api_secret)
+def _config(account: BrokerAccountConfig | None) -> dict:
+    return account.config if account else {
+        "api_key": settings.coinbase_api_key,
+        "api_secret": settings.coinbase_api_secret,
+    }
 
 
-def _not_configured() -> dict:
+def _configured(account: BrokerAccountConfig | None = None) -> bool:
+    config = _config(account)
+    return bool(config.get("api_key") and config.get("api_secret"))
+
+
+def _not_configured(account: BrokerAccountConfig | None = None) -> dict:
     return {"broker": "coinbase", "error": "Coinbase credentials are not configured"}
 
 
-def _get_client():
+def _get_client(account: BrokerAccountConfig | None = None):
     from coinbase.rest import RESTClient
 
-    return RESTClient(
-        api_key=settings.coinbase_api_key,
-        api_secret=settings.coinbase_api_secret,
-    )
+    config = _config(account)
+    return RESTClient(api_key=config["api_key"], api_secret=config["api_secret"])
 
 
-def get_coinbase_account() -> dict:
-    if not _configured():
-        return _not_configured()
+def get_coinbase_account(account: BrokerAccountConfig | None = None) -> dict:
+    if not _configured(account):
+        return _not_configured(account)
     try:
-        client = _get_client()
+        client = _get_client(account)
         accounts = client.get_accounts()
         balances = []
         for acc in accounts.get("accounts", []):
@@ -50,19 +59,19 @@ def get_coinbase_account() -> dict:
         return {"broker": "coinbase", "error": str(exc)}
 
 
-def get_coinbase_positions() -> list[dict]:
+def get_coinbase_positions(account: BrokerAccountConfig | None = None) -> list[dict]:
     """For Coinbase, positions = non-zero crypto holdings."""
-    result = get_coinbase_account()
+    result = get_coinbase_account(account)
     if "error" in result:
         return [result]
     return result.get("balances", [])
 
 
-def get_coinbase_orders() -> list[dict]:
-    if not _configured():
-        return [_not_configured()]
+def get_coinbase_orders(account: BrokerAccountConfig | None = None) -> list[dict]:
+    if not _configured(account):
+        return [_not_configured(account)]
     try:
-        client = _get_client()
+        client = _get_client(account)
         resp = client.list_orders(order_status="FILLED")
         orders = resp.get("orders", [])
         return [
@@ -89,20 +98,22 @@ def submit_coinbase_order(
     quantity: float,
     order_type: str = "market",
     limit_price: float | None = None,
+    account: BrokerAccountConfig | None = None,
 ) -> dict:
     """
     symbol: Coinbase product ID, e.g. 'BTC-USD'
     side: 'buy' or 'sell'
     """
-    if not _configured():
-        return _not_configured()
+    if not _configured(account):
+        return _not_configured(account)
     try:
         import uuid
 
-        client = _get_client()
+        client = _get_client(account)
         client_order_id = str(uuid.uuid4())
         product_id = symbol.upper()
 
+        config: dict[str, Any]
         if order_type == "market":
             if side.lower() == "buy":
                 config = {"market_market_ioc": {"quote_size": str(quantity)}}
@@ -140,11 +151,13 @@ def submit_coinbase_order(
         return {"success": False, "error": str(exc)}
 
 
-def cancel_coinbase_order(order_id: str) -> dict:
-    if not _configured():
-        return _not_configured()
+def cancel_coinbase_order(
+    order_id: str, account: BrokerAccountConfig | None = None
+) -> dict:
+    if not _configured(account):
+        return _not_configured(account)
     try:
-        client = _get_client()
+        client = _get_client(account)
         resp = client.cancel_orders(order_ids=[order_id])
         results = resp.get("results", [])
         if results:

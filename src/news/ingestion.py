@@ -54,7 +54,7 @@ async def ingest_articles(articles: list[dict[str, Any]]) -> int:
         return result.rowcount or 0
 
 
-async def run_ingestion(days_back: int = 1) -> dict[str, int]:
+async def run_ingestion(days_back: int = 1) -> dict[str, Any]:
     """Fetch all sources and persist. Returns stats dict."""
     logger.info("News ingestion started (days_back=%d)", days_back)
     try:

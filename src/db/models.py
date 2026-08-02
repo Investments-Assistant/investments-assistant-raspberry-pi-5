@@ -5,7 +5,19 @@ from __future__ import annotations
 from datetime import UTC, datetime
 import uuid
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, Index, Integer, String, Text, func, text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Float,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.db.database import Base
@@ -54,6 +66,35 @@ class User(Base):
     )
 
 
+class BrokerAccount(Base):
+    """Encrypted per-user brokerage connection configuration."""
+
+    __tablename__ = "broker_accounts"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "broker",
+            "display_name",
+            name="uq_broker_accounts_user_broker_name",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(String(36), index=True)
+    broker: Mapped[str] = mapped_column(String(32), index=True)
+    display_name: Mapped[str] = mapped_column(String(128))
+    # Contains the complete provider configuration, including secrets, as a
+    # Fernet token. Plaintext credentials never enter a normal ORM column.
+    config_encrypted: Mapped[str] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+
 class Trade(Base):
     """A trade executed or recommended by the agent."""
 
@@ -61,6 +102,7 @@ class Trade(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    broker_account_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     broker: Mapped[str] = mapped_column(String(32))  # alpaca | ibkr | coinbase | binance
     symbol: Mapped[str] = mapped_column(String(20))
     side: Mapped[str] = mapped_column(String(8))  # buy | sell

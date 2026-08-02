@@ -3,6 +3,24 @@
 The assistant integrates with four brokerages through their official Python SDKs.
 Each broker is independently optional — configure only the ones you use.
 
+## Per-user account configuration
+
+Authenticated users manage named accounts in **Brokerage Accounts** in the web UI. Each user
+may configure multiple accounts for the same provider. The UI sends credentials only over the
+authenticated local HTTPS connection; the API encrypts the complete provider configuration with
+Fernet before PostgreSQL storage and returns only masked fields. Secret inputs are write-only:
+leaving a secret blank while editing keeps the existing ciphertext value.
+
+`BROKER_CREDENTIALS_KEY` must be generated with `scripts/create_broker_key.py`. Without it,
+chat, market data, news, and simulations remain available, but account management and
+authenticated broker operations explain that secure brokerage access is unavailable. A user
+with no active account receives the same clear capability response rather than an SDK error.
+
+For account-specific tools, `account_id` is optional when exactly one account matches. When
+multiple accounts match, the dispatcher returns safe account labels/IDs and asks the assistant
+to have the user choose one. Trade proposals store only the account ID, never credentials, and
+confirmation performs a fresh ownership lookup before routing.
+
 ---
 
 ## Design principles
@@ -36,7 +54,7 @@ Each broker is independently optional — configure only the ones you use.
 - Fractional shares mean the agent can buy precise USD amounts rather than whole shares
 - `alpaca-py` has a clean typed API with `TradingClient`, `MarketOrderRequest`, etc.
 
-**Configuration**
+**Legacy system fallback configuration**
 ```
 ALPACA_API_KEY=PKxxxxxxxxxxxxxxxx
 ALPACA_SECRET_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
@@ -77,7 +95,7 @@ or a similar platform. Alpaca only supports equities.
 This "connect → do → disconnect" pattern avoids keeping a persistent connection alive,
 which IB sometimes drops. The downside is connection latency per call (~1–2 seconds).
 
-**Configuration**
+**Legacy system fallback configuration**
 ```
 IBKR_ENABLED=false          # must be explicitly set to true
 IBKR_HOST=127.0.0.1         # or IP of the machine running IB Gateway
@@ -117,7 +135,7 @@ enabled.
 choice for USD-denominated crypto trading. The Advanced Trade API supports limit and
 market orders with proper USD settlement.
 
-**Configuration**
+**Legacy system fallback configuration**
 
 ```env
 COINBASE_API_KEY=organizations/xxxxx/apiKeys/xxxxx
@@ -157,7 +175,7 @@ quirk. The implementation handles it in `submit_coinbase_order`.
 altcoins not available on Coinbase. It's the go-to exchange for non-USD pairs (BTCUSDT,
 ETHUSDT, SOLUSDT, etc.).
 
-**Configuration**
+**Legacy system fallback configuration**
 ```
 BINANCE_API_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 BINANCE_SECRET_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx

@@ -88,14 +88,22 @@ nano .env
 | `LLM_MODEL_PATH` | `/app/models/qwen2.5-7b-instruct-q4_k_m.gguf` |
 | `ALLOWED_IPS` | `10.8.0.0/24` |
 | `AUTH_USERNAME` / `AUTH_PASSWORD_HASH` / `AUTH_SESSION_SECRET` | Generate with `python3 scripts/create_auth_hash.py` |
+| `BROKER_CREDENTIALS_KEY` | Generate with `python3 scripts/create_broker_key.py`; required for UI-managed accounts |
 | `TRADING_MODE` | `recommend` (safe starting mode) |
 | `LIVE_TRADING_ENABLED` | `false` |
 | `TZ` | `Europe/Lisbon` |
 
 Broker API keys are optional and are required only for account/order connectivity (not AI
-APIs). Fill in only the ones you have; keep paper/testnet routes during validation:
-`ALPACA_API_KEY` / `ALPACA_SECRET_KEY`, `COINBASE_API_KEY` / `COINBASE_API_SECRET`,
-`BINANCE_API_KEY` / `BINANCE_SECRET_KEY`.
+APIs). Generate the encryption key, put it in `.env`, and add each user's brokerage accounts
+from the authenticated UI. You may leave every broker unconfigured: market/news/ETF/crypto
+analysis and simulations still work, while account-specific actions return a clear missing
+access explanation. Keep paper/testnet routes during validation. The legacy broker variables
+in `.env` are only a compatibility fallback for unauthenticated scheduler/system jobs; they
+are not inherited by logged-in users.
+
+```bash
+python3 scripts/create_broker_key.py >> .env
+```
 
 The configured `AUTH_USERNAME` is the bootstrap local account. After the containers are
 running, create another account from the repository root without enabling public sign-up:
@@ -107,8 +115,8 @@ docker compose exec app python scripts/create_user.py --username second-user --d
 Each user gets an independent profile and chat history. A browser tab has its own conversation
 ID; refreshing that tab restores its history. The model itself is shared and inference is
 serialized, so two simultaneous users remain isolated but the second model turn may wait for
-the first on a 4-core Pi. Trading mode is per user; broker credentials remain a shared
-household account configuration.
+the first on a 4-core Pi. Trading mode and brokerage credentials are per user; each user may
+have multiple named accounts and must choose an account when a broker operation is ambiguous.
 
 ---
 

@@ -16,6 +16,7 @@ repository = "https://github.com/Investments-Assistant/"
 [tool.poetry.dependencies]
 # ── Core ──────────────────────────────────────────────────────────────────────
 python-dotenv = ">=1.0.0"
+cryptography = ">=42.0.4"
 pydantic = ">=2.0.0"
 pydantic-settings = ">=2.0.0"
 

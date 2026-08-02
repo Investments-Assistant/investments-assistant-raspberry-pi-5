@@ -4,34 +4,45 @@ from __future__ import annotations
 
 from src.agent.utils.logger import get_logger
 from src.config import settings
+from src.tools.broker_accounts import BrokerAccountConfig
 
 logger = get_logger(__name__)
 
 
-def _configured() -> bool:
-    return bool(settings.binance_api_key and settings.binance_secret_key)
+def _config(account: BrokerAccountConfig | None) -> dict:
+    return account.config if account else {
+        "api_key": settings.binance_api_key,
+        "secret_key": settings.binance_secret_key,
+        "testnet": settings.binance_testnet,
+    }
 
 
-def _not_configured() -> dict:
+def _configured(account: BrokerAccountConfig | None = None) -> bool:
+    config = _config(account)
+    return bool(config.get("api_key") and config.get("secret_key"))
+
+
+def _not_configured(account: BrokerAccountConfig | None = None) -> dict:
     return {"broker": "binance", "error": "Binance credentials are not configured"}
 
 
-def _get_client():
+def _get_client(account: BrokerAccountConfig | None = None):
     from binance.client import Client
 
+    config = _config(account)
     client = Client(
-        api_key=settings.binance_api_key,
-        api_secret=settings.binance_secret_key,
-        testnet=settings.binance_testnet,
+        api_key=config["api_key"],
+        api_secret=config["secret_key"],
+        testnet=config.get("testnet", True),
     )
     return client
 
 
-def get_binance_account() -> dict:
-    if not _configured():
-        return _not_configured()
+def get_binance_account(account: BrokerAccountConfig | None = None) -> dict:
+    if not _configured(account):
+        return _not_configured(account)
     try:
-        client = _get_client()
+        client = _get_client(account)
         info = client.get_account()
         balances = [
             {
@@ -44,7 +55,7 @@ def get_binance_account() -> dict:
         ]
         return {
             "broker": "binance",
-            "testnet": settings.binance_testnet,
+            "testnet": _config(account).get("testnet", True),
             "can_trade": info.get("canTrade"),
             "maker_commission": info.get("makerCommission"),
             "taker_commission": info.get("takerCommission"),
@@ -55,19 +66,21 @@ def get_binance_account() -> dict:
         return {"broker": "binance", "error": str(exc)}
 
 
-def get_binance_positions() -> list[dict]:
+def get_binance_positions(account: BrokerAccountConfig | None = None) -> list[dict]:
     """For spot Binance, return non-zero balances."""
-    result = get_binance_account()
+    result = get_binance_account(account)
     if "error" in result:
         return [result]
     return result.get("balances", [])
 
 
-def get_binance_orders(symbol: str | None = None) -> list[dict]:
-    if not _configured():
-        return [_not_configured()]
+def get_binance_orders(
+    symbol: str | None = None, account: BrokerAccountConfig | None = None
+) -> list[dict]:
+    if not _configured(account):
+        return [_not_configured(account)]
     try:
-        client = _get_client()
+        client = _get_client(account)
         if symbol:
             orders = client.get_all_orders(symbol=symbol.upper(), limit=100)
         else:
@@ -103,12 +116,13 @@ def submit_binance_order(
     quantity: float,
     order_type: str = "market",
     limit_price: float | None = None,
+    account: BrokerAccountConfig | None = None,
 ) -> dict:
     """
     symbol: Binance trading pair e.g. 'BTCUSDT'
     """
-    if not _configured():
-        return _not_configured()
+    if not _configured(account):
+        return _not_configured(account)
     try:
         from binance.enums import (
             ORDER_TYPE_LIMIT,
@@ -118,7 +132,7 @@ def submit_binance_order(
             TIME_IN_FORCE_GTC,
         )
 
-        client = _get_client()
+        client = _get_client(account)
         _side = SIDE_BUY if side.lower() == "buy" else SIDE_SELL
         sym = symbol.upper()
 
@@ -157,11 +171,15 @@ def submit_binance_order(
         return {"success": False, "error": str(exc)}
 
 
-def cancel_binance_order(order_id: str, symbol: str = "BTCUSDT") -> dict:
-    if not _configured():
-        return _not_configured()
+def cancel_binance_order(
+    order_id: str,
+    symbol: str = "BTCUSDT",
+    account: BrokerAccountConfig | None = None,
+) -> dict:
+    if not _configured(account):
+        return _not_configured(account)
     try:
-        client = _get_client()
+        client = _get_client(account)
         result = client.cancel_order(symbol=symbol.upper(), orderId=int(order_id))
         return {"success": True, "order_id": order_id, "status": result.get("status")}
     except Exception as exc:

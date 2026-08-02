@@ -137,6 +137,9 @@ celerybeat.pid
 # Environments
 .env
 .envrc
+models/
+reports/
+config/nginx/certs/
 .venv
 env/
 venv/

@@ -52,6 +52,7 @@ COPY src/ ./src/
 COPY .env.example ./.env.example
 RUN mkdir -p /app/scripts
 COPY scripts/create_user.py ./scripts/create_user.py
+COPY scripts/create_broker_key.py ./scripts/create_broker_key.py
 
 # Create directories and set up non-root user for security
 RUN mkdir -p /app/reports /app/models \

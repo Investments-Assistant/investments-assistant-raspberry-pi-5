@@ -7,17 +7,31 @@ import json
 from pathlib import Path
 import re
 import secrets
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 
 from src.agent.utils.logger import get_logger
 from src.config import settings
 from src.db.database import async_session
-from src.db.models import ChatMessage, DailyPnL, Report, Trade, User
+from src.db.models import BrokerAccount, ChatMessage, DailyPnL, Report, Trade, User
 from src.scheduler.jobs import get_latest_snapshot
+from src.tools.broker_accounts import (
+    BROKER_FIELDS,
+    SECRET_FIELDS,
+    SUPPORTED_BROKERS,
+    BrokerAccountConfig,
+    BrokerVaultUnavailable,
+    decrypt_config,
+    encrypt_config,
+    ensure_broker_vault,
+    load_user_broker_accounts,
+    validate_broker_config,
+)
 from src.web.auth import (
     CSRF_COOKIE,
     SESSION_COOKIE,
@@ -233,6 +247,7 @@ async def login(request: Request) -> JSONResponse:
         record_login_failure(ip)
         # Do not distinguish an unknown ID from a bad password.
         raise HTTPException(status_code=401, detail="Invalid ID or password")
+    assert user is not None
 
     clear_login_failures(ip)
     response = JSONResponse(
@@ -411,6 +426,246 @@ async def update_trading_mode(request: Request) -> dict:
         raise
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Trading mode persistence failed") from exc
+
+
+def _broker_account_public(row: BrokerAccount, config: dict) -> dict:
+    return BrokerAccountConfig(
+        id=row.id,
+        user_id=row.user_id,
+        broker=row.broker,
+        display_name=row.display_name,
+        config=config,
+    ).public | {"active": bool(row.is_active)}
+
+
+def _broker_account_body(request_body: object) -> tuple[str, str, dict, bool | None]:
+    if not isinstance(request_body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    broker = str(request_body.get("broker", "")).lower().strip()
+    if broker not in SUPPORTED_BROKERS:
+        raise HTTPException(status_code=400, detail=f"Unknown broker: {broker or 'missing'}")
+    display_name = str(request_body.get("display_name", "")).strip()
+    if not display_name or len(display_name) > 128:
+        raise HTTPException(
+            status_code=400,
+            detail="display_name is required and limited to 128 characters",
+        )
+    config = request_body.get("config", {})
+    if not isinstance(config, dict):
+        raise HTTPException(status_code=400, detail="config must be a JSON object")
+    active = request_body.get("active")
+    if active is not None and not isinstance(active, bool):
+        raise HTTPException(status_code=400, detail="active must be a boolean")
+    return broker, display_name, config, active
+
+
+def _validated_account_config(
+    broker: str,
+    raw_config: dict,
+    existing: dict | None = None,
+) -> dict:
+    merged = dict(existing or {})
+    secret_fields = SECRET_FIELDS[broker]
+    for field, value in raw_config.items():
+        # An empty secret in the edit form means "keep the existing secret";
+        # the UI never needs to read a secret back from the server.
+        if field in secret_fields and value == "" and field in merged:
+            continue
+        merged[field] = value
+    try:
+        normalized = validate_broker_config(broker, merged)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    missing = [
+        field
+        for field in secret_fields
+        if not str(normalized.get(field, "")).strip()
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Missing required credential field(s): {', '.join(sorted(missing))}",
+        )
+    return normalized
+
+
+@router.get(
+    "/api/broker-accounts/providers",
+    dependencies=[Depends(require_allowed_ip), Depends(require_authenticated)],
+)
+async def broker_account_providers() -> dict:
+    """Describe supported connection fields without exposing any credentials."""
+    return {
+        "providers": {
+            broker: {
+                "fields": sorted(BROKER_FIELDS[broker]),
+                "secret_fields": sorted(SECRET_FIELDS[broker]),
+            }
+            for broker in SUPPORTED_BROKERS
+        }
+    }
+
+
+@router.get(
+    "/api/broker-accounts",
+    dependencies=[Depends(require_allowed_ip), Depends(require_authenticated)],
+)
+async def list_broker_accounts(request: Request) -> dict:
+    """List the authenticated user's accounts with secrets masked."""
+    principal = require_authenticated(request)
+    if not principal.user_id:
+        raise HTTPException(status_code=503, detail="Broker account persistence is unavailable")
+    try:
+        ensure_broker_vault()
+        accounts = await load_user_broker_accounts(principal.user_id)
+        return {"vault_configured": True, "accounts": [account.public for account in accounts]}
+    except BrokerVaultUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("Could not list broker accounts: %s", exc)
+        raise HTTPException(status_code=503, detail="Broker account service unavailable") from exc
+
+
+@router.post(
+    "/api/broker-accounts",
+    dependencies=[
+        Depends(require_allowed_ip),
+        Depends(require_authenticated),
+        Depends(require_csrf),
+    ],
+)
+async def create_broker_account(request: Request) -> dict:
+    """Create one encrypted broker configuration owned by the current user."""
+    principal = require_authenticated(request)
+    if not principal.user_id:
+        raise HTTPException(status_code=503, detail="Broker account persistence is unavailable")
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    broker, display_name, raw_config, active = _broker_account_body(body)
+    config = _validated_account_config(broker, raw_config)
+    try:
+        encrypted = encrypt_config(config)
+        async with async_session() as session:
+            row = BrokerAccount(
+                id=str(uuid.uuid4()),
+                user_id=principal.user_id,
+                broker=broker,
+                display_name=display_name,
+                config_encrypted=encrypted,
+                is_active=True if active is None else active,
+            )
+            session.add(row)
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                await session.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail="An account with this provider and name already exists.",
+                ) from exc
+            return _broker_account_public(row, config)
+    except BrokerVaultUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Could not create broker account: %s", exc)
+        raise HTTPException(status_code=503, detail="Broker account could not be saved") from exc
+
+
+@router.put(
+    "/api/broker-accounts/{account_id}",
+    dependencies=[
+        Depends(require_allowed_ip),
+        Depends(require_authenticated),
+        Depends(require_csrf),
+    ],
+)
+async def update_broker_account(account_id: str, request: Request) -> dict:
+    """Update one owned account; blank secret fields preserve the old secret."""
+    principal = require_authenticated(request)
+    if not principal.user_id:
+        raise HTTPException(status_code=503, detail="Broker account persistence is unavailable")
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    try:
+        async with async_session() as session:
+            result = await session.execute(
+                select(BrokerAccount).where(
+                    BrokerAccount.id == account_id,
+                    BrokerAccount.user_id == principal.user_id,
+                )
+            )
+            row = result.scalar_one_or_none()
+            if row is None:
+                raise HTTPException(status_code=404, detail="Broker account not found")
+            existing = decrypt_config(row.config_encrypted)
+            broker = row.broker
+            display_name = str(body.get("display_name", row.display_name)).strip()
+            if not display_name or len(display_name) > 128:
+                raise HTTPException(
+                    status_code=400,
+                    detail="display_name is required and limited to 128 characters",
+                )
+            raw_config = body.get("config", {})
+            if not isinstance(raw_config, dict):
+                raise HTTPException(status_code=400, detail="config must be a JSON object")
+            config = _validated_account_config(broker, raw_config, existing)
+            row.display_name = display_name
+            row.config_encrypted = encrypt_config(config)
+            if isinstance(body.get("active"), bool):
+                row.is_active = body["active"]
+            await session.commit()
+            return _broker_account_public(row, config)
+    except BrokerVaultUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="Broker account update conflicted") from exc
+    except Exception as exc:
+        logger.error("Could not update broker account %s: %s", account_id, exc)
+        raise HTTPException(status_code=503, detail="Broker account could not be updated") from exc
+
+
+@router.delete(
+    "/api/broker-accounts/{account_id}",
+    dependencies=[
+        Depends(require_allowed_ip),
+        Depends(require_authenticated),
+        Depends(require_csrf),
+    ],
+)
+async def deactivate_broker_account(account_id: str, request: Request) -> dict:
+    """Disable an account without destroying its encrypted audit/config record."""
+    principal = require_authenticated(request)
+    if not principal.user_id:
+        raise HTTPException(status_code=503, detail="Broker account persistence is unavailable")
+    try:
+        async with async_session() as session:
+            result = await session.execute(
+                select(BrokerAccount).where(
+                    BrokerAccount.id == account_id,
+                    BrokerAccount.user_id == principal.user_id,
+                )
+            )
+            row = result.scalar_one_or_none()
+            if row is None:
+                raise HTTPException(status_code=404, detail="Broker account not found")
+            row.is_active = False
+            await session.commit()
+            return {"success": True, "id": row.id, "active": False}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Could not deactivate broker account %s: %s", account_id, exc)
+        raise HTTPException(status_code=503, detail="Broker account could not be disabled") from exc
 
 
 @router.get(

@@ -92,6 +92,26 @@ owner. `scripts/create_user.py` provisions additional accounts. Startup applies 
 PostgreSQL changes for `user_id` and assigns legacy NULL chat/trade rows to the bootstrap
 account; it does not reassign later users' rows.
 
+### `broker_accounts`
+
+One encrypted brokerage connection per user/provider/name. A user can have several accounts
+at the same provider, such as separate Alpaca paper and live accounts.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | UUID (string) | Primary key and safe account selector exposed to the LLM/UI |
+| `user_id` | String(36) | Indexed owner; account queries always include this value |
+| `broker` | String(32) | `alpaca`, `ibkr`, `coinbase`, or `binance` |
+| `display_name` | String(128) | User-visible label; unique per user/provider |
+| `config_encrypted` | Text | Fernet token containing provider settings and credentials |
+| `is_active` | Boolean | Soft-disable switch; inactive accounts are not tool candidates |
+| `created_at`, `updated_at` | DateTime(tz) | Audit timestamps |
+
+The encryption key is supplied through `BROKER_CREDENTIALS_KEY`, never stored in PostgreSQL,
+returned by the API, or placed in the LLM context. The application returns only masked secret
+suffixes and configured/not-configured flags. Account management is intentionally unavailable
+until this key is configured, while non-broker chat tools continue to work.
+
 ---
 
 ### `trades`
@@ -102,6 +122,7 @@ One row per order submitted or recommended.
 | --- | --- | --- |
 | `id` | UUID | Primary key |
 | `user_id` | String(36) | Indexed owner; legacy NULL rows are migrated to the bootstrap user |
+| `broker_account_id` | String(36) | The selected user's brokerage account; null for legacy/system rows |
 | `broker` | String(32) | `alpaca`, `ibkr`, `coinbase`, `binance` |
 | `symbol` | String(20) | Ticker |
 | `side` | String(8) | `buy` or `sell` |

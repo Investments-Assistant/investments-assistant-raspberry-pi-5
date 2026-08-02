@@ -100,15 +100,18 @@ class LlamaCppClient(BaseLLMClient):
         for _round_number in range(max_rounds):
             # llama-cpp is synchronous — run in thread pool to keep event loop free.
             async with self._inference_lock:
-                response = await loop.run_in_executor(
-                    None,
-                    lambda msgs=full_messages: self._llm.create_chat_completion(
-                        messages=msgs,
+                def infer() -> Any:
+                    return self._llm.create_chat_completion(
+                        messages=full_messages,
                         tools=_TOOLS,
                         tool_choice="auto",
                         max_tokens=settings.agent_max_tokens,
                         temperature=settings.agent_temperature,
-                    ),
+                    )
+
+                response = await loop.run_in_executor(
+                    None,
+                    infer,
                 )
 
             choice = response["choices"][0]

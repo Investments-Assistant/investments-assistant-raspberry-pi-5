@@ -361,6 +361,186 @@ async function saveProfile() {
   }
 }
 
+// ── Per-user brokerage accounts ─────────────────────────────────────────────
+
+const DEFAULT_BROKER_PROVIDERS = {
+  alpaca: {fields: ['api_key', 'paper', 'secret_key'], secret_fields: ['api_key', 'secret_key']},
+  ibkr: {fields: ['client_id', 'enabled', 'host', 'port'], secret_fields: []},
+  coinbase: {fields: ['api_key', 'api_secret'], secret_fields: ['api_key', 'api_secret']},
+  binance: {fields: ['api_key', 'secret_key', 'testnet'], secret_fields: ['api_key', 'secret_key']},
+};
+let brokerProviders = {...DEFAULT_BROKER_PROVIDERS};
+let brokerAccounts = [];
+let editingBrokerAccountId = null;
+let editingBrokerAccount = null;
+
+function brokerLabel(broker) {
+  return {alpaca: 'Alpaca', ibkr: 'Interactive Brokers', coinbase: 'Coinbase', binance: 'Binance'}[broker] || broker;
+}
+
+function brokerFieldLabel(field) {
+  return field.replaceAll('_', ' ').replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function renderBrokerFields() {
+  const provider = document.getElementById('broker-provider').value;
+  const definition = brokerProviders[provider] || DEFAULT_BROKER_PROVIDERS[provider];
+  const secretFields = new Set(definition.secret_fields || []);
+  const publicConfig = editingBrokerAccount?.broker === provider
+    ? (editingBrokerAccount.masked_fields || {}) : {};
+  const configured = editingBrokerAccount?.broker === provider
+    ? (editingBrokerAccount.configured_fields || {}) : {};
+  const fieldsEl = document.getElementById('broker-fields');
+  fieldsEl.innerHTML = (definition.fields || []).map(field => {
+    const isBoolean = ['paper', 'testnet', 'enabled'].includes(field);
+    const inputType = secretFields.has(field) ? 'password' : isBoolean ? 'checkbox' : field === 'port' || field === 'client_id' ? 'number' : 'text';
+    if (isBoolean) {
+      const defaultChecked = editingBrokerAccountId ? Boolean(publicConfig[field]) : provider === 'ibkr' ? true : true;
+      return `<label class="broker-field broker-check"><input id="broker-field-${field}" data-broker-field="${field}" type="checkbox" ${defaultChecked ? 'checked' : ''} /> ${escapeHtml(brokerFieldLabel(field))}</label>`;
+    }
+    const placeholder = secretFields.has(field)
+      ? configured[field] ? 'Configured — leave blank to keep it' : 'Required credential'
+      : publicConfig[field] ?? '';
+    const value = secretFields.has(field) ? '' : publicConfig[field] ?? (field === 'port' ? '4002' : field === 'client_id' ? '1' : '');
+    return `<label class="broker-field">${escapeHtml(brokerFieldLabel(field))}<input id="broker-field-${field}" data-broker-field="${field}" type="${inputType}" value="${escapeHtml(value)}" placeholder="${escapeHtml(String(placeholder))}" /></label>`;
+  }).join('');
+}
+
+function renderBrokerAccounts() {
+  const el = document.getElementById('broker-accounts-list');
+  if (!brokerAccounts.length) {
+    el.textContent = 'No active brokerage accounts. Market analysis still works without them.';
+    return;
+  }
+  el.innerHTML = brokerAccounts.map(account => {
+    const fields = Object.entries(account.masked_fields || {})
+      .filter(([field]) => account.configured_fields?.[field] || account.masked_fields[field] !== '')
+      .map(([field, value]) => `${escapeHtml(brokerFieldLabel(field))}: ${escapeHtml(String(value))}`)
+      .join(' · ');
+    return `<div class="broker-account">
+      <div class="broker-account-head"><span class="broker-account-name">${escapeHtml(account.display_name)}</span><span class="broker-account-provider">${escapeHtml(brokerLabel(account.broker))}</span></div>
+      <div class="broker-account-fields">${fields || 'No fields configured'}</div>
+      <div class="broker-account-actions"><button data-edit-account="${escapeHtml(account.id)}">Edit</button><button data-delete-account="${escapeHtml(account.id)}">Disable</button></div>
+    </div>`;
+  }).join('');
+  el.querySelectorAll('[data-edit-account]').forEach(button => {
+    button.addEventListener('click', () => editBrokerAccount(button.dataset.editAccount));
+  });
+  el.querySelectorAll('[data-delete-account]').forEach(button => {
+    button.addEventListener('click', () => deleteBrokerAccount(button.dataset.deleteAccount));
+  });
+}
+
+function setBrokerStatus(message, kind = '') {
+  const el = document.getElementById('broker-status');
+  el.textContent = message;
+  el.className = `profile-status ${kind}`;
+}
+
+async function loadBrokerAccounts() {
+  try {
+    const providerResp = await fetch('/api/broker-accounts/providers');
+    if (providerResp.ok) {
+      const providerData = await providerResp.json();
+      brokerProviders = providerData.providers || brokerProviders;
+    }
+    renderBrokerFields();
+    const resp = await fetch('/api/broker-accounts');
+    if (resp.status === 401) { window.location.assign('/login'); return; }
+    if (!resp.ok) {
+      const detail = await resp.json().catch(() => ({}));
+      throw new Error(detail.detail || 'Brokerage account management is unavailable.');
+    }
+    const data = await resp.json();
+    brokerAccounts = Array.isArray(data.accounts) ? data.accounts : [];
+    renderBrokerAccounts();
+    setBrokerStatus('Encrypted account settings ready', 'saved');
+  } catch (error) {
+    console.error('Broker account load failed', error);
+    document.getElementById('broker-accounts-list').textContent = error.message;
+    setBrokerStatus(error.message, 'error');
+  }
+}
+
+function editBrokerAccount(accountId) {
+  const account = brokerAccounts.find(item => item.id === accountId);
+  if (!account) return;
+  editingBrokerAccountId = account.id;
+  editingBrokerAccount = account;
+  const providerEl = document.getElementById('broker-provider');
+  providerEl.value = account.broker;
+  providerEl.disabled = true;
+  document.getElementById('broker-display-name').value = account.display_name || '';
+  document.getElementById('broker-cancel').hidden = false;
+  renderBrokerFields();
+  setBrokerStatus('Editing account — blank secrets keep the existing values');
+}
+
+function resetBrokerForm() {
+  editingBrokerAccountId = null;
+  editingBrokerAccount = null;
+  document.getElementById('broker-provider').disabled = false;
+  document.getElementById('broker-display-name').value = '';
+  document.getElementById('broker-cancel').hidden = true;
+  renderBrokerFields();
+  setBrokerStatus('');
+}
+
+function collectBrokerConfig() {
+  const config = {};
+  document.querySelectorAll('[data-broker-field]').forEach(input => {
+    if (input.type === 'checkbox') config[input.dataset.brokerField] = input.checked;
+    else if (input.value !== '') config[input.dataset.brokerField] = input.type === 'number' ? Number(input.value) : input.value;
+    else if (editingBrokerAccountId) config[input.dataset.brokerField] = '';
+  });
+  return config;
+}
+
+async function saveBrokerAccount() {
+  const provider = document.getElementById('broker-provider').value;
+  const body = {
+    broker: provider,
+    display_name: document.getElementById('broker-display-name').value.trim(),
+    config: collectBrokerConfig(),
+  };
+  setBrokerStatus('Saving encrypted settings…');
+  try {
+    const url = editingBrokerAccountId ? `/api/broker-accounts/${encodeURIComponent(editingBrokerAccountId)}` : '/api/broker-accounts';
+    const resp = await fetch(url, {
+      method: editingBrokerAccountId ? 'PUT' : 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken()},
+      body: JSON.stringify(body),
+    });
+    if (resp.status === 401) { window.location.assign('/login'); return; }
+    if (!resp.ok) {
+      const detail = await resp.json().catch(() => ({}));
+      throw new Error(detail.detail || 'Brokerage account could not be saved.');
+    }
+    resetBrokerForm();
+    await loadBrokerAccounts();
+  } catch (error) {
+    setBrokerStatus(error.message, 'error');
+  }
+}
+
+async function deleteBrokerAccount(accountId) {
+  if (!window.confirm('Disable this brokerage account? Its encrypted record will be retained.')) return;
+  try {
+    const resp = await fetch(`/api/broker-accounts/${encodeURIComponent(accountId)}`, {
+      method: 'DELETE', headers: {'X-CSRF-Token': csrfToken()},
+    });
+    if (resp.status === 401) { window.location.assign('/login'); return; }
+    if (!resp.ok) {
+      const detail = await resp.json().catch(() => ({}));
+      throw new Error(detail.detail || 'Brokerage account could not be disabled.');
+    }
+    if (editingBrokerAccountId === accountId) resetBrokerForm();
+    await loadBrokerAccounts();
+  } catch (error) {
+    setBrokerStatus(error.message, 'error');
+  }
+}
+
 async function loadHistory() {
   try {
     const resp = await fetch(
@@ -494,6 +674,7 @@ function toggleSidebar() {
 globalThis.addEventListener('DOMContentLoaded', async () => {
   const hadHistory = await loadHistory();
   await loadProfile();
+  loadBrokerAccounts();
   connect();
   loadSnapshot();
   loadSafety();

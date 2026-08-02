@@ -129,6 +129,33 @@ body {
 .profile-status.saved { color: var(--green); }
 .profile-status.error { color: var(--red); }
 
+/* Per-user brokerage connections */
+.broker-help { color: var(--text-muted); font-size: 0.68rem; line-height: 1.35; margin-bottom: 7px; }
+.broker-accounts-list { display: flex; flex-direction: column; gap: 5px; margin-bottom: 8px; }
+.broker-account {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 7px;
+  padding: 7px 8px; font-size: 0.73rem;
+}
+.broker-account-head { display: flex; justify-content: space-between; gap: 6px; align-items: center; }
+.broker-account-name { color: var(--text-main); font-weight: 600; }
+.broker-account-provider { color: var(--accent-lit); text-transform: uppercase; font-size: 0.65rem; }
+.broker-account-fields { color: var(--text-muted); line-height: 1.4; margin-top: 3px; word-break: break-word; }
+.broker-account-actions { display: flex; gap: 5px; margin-top: 5px; }
+.broker-account-actions button, .broker-cancel {
+  border: 1px solid var(--border); border-radius: 5px; padding: 3px 6px;
+  background: transparent; color: var(--text-muted); cursor: pointer; font-size: 0.68rem;
+}
+.broker-account-actions button:hover, .broker-cancel:hover { border-color: var(--accent); color: var(--accent-lit); }
+.broker-fields { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
+.broker-field { display: flex; flex-direction: column; gap: 3px; color: var(--text-muted); font-size: 0.68rem; }
+.broker-field input[type="text"], .broker-field input[type="password"], .broker-field input[type="number"] {
+  width: 100%; padding: 6px 7px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg-input); color: var(--text-main); font: inherit; font-size: 0.73rem;
+}
+.broker-field input:focus { outline: none; border-color: var(--accent); }
+.broker-check { flex-direction: row; align-items: center; gap: 7px; }
+.broker-actions { display: flex; gap: 6px; margin-top: 7px; }
+
 /* Market snapshot */
 .market-snapshot {
   font-size: 0.78rem; line-height: 1.6;

@@ -5436,4 +5436,4 @@ mcp = ["mcp"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.15,!=3.14.1"
-content-hash = "3b5237ddde59690021f55f57a872a052ee7f20d8ef7c5896f13b9ef2f77c2f8c"
+content-hash = "e47526da13035803f60c4515d21fafd633e32bac6dac5decf15499447f795d53"

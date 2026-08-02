@@ -18,6 +18,7 @@ from src.agent.prompts import SYSTEM_PROMPT
 from src.agent.utils.logger import get_logger
 from src.config import settings
 from src.db.models import User
+from src.tools.broker_accounts import BrokerVaultUnavailable, load_user_broker_accounts
 from src.tools.dispatcher import tool_context
 
 logger = get_logger(__name__)
@@ -36,6 +37,7 @@ class InvestmentsAssistantOrchestrator:
             "description": "",
             "preferences": {},
         }
+        self.broker_accounts: list[dict[str, Any]] = []
         self._client: BaseLLMClient = create_llm_client()
         # llama.cpp shares one in-process model across sessions.  Serialising
         # turns prevents concurrent calls from corrupting the model context and
@@ -48,7 +50,11 @@ class InvestmentsAssistantOrchestrator:
             auto_max_trade_usd=settings.auto_max_trade_usd,
             auto_daily_loss_limit_usd=settings.auto_daily_loss_limit_usd,
         )
-        profile = json.dumps(self.user_profile, ensure_ascii=False, sort_keys=True)[:8_000]
+        user_context = {
+            **self.user_profile,
+            "broker_accounts": self.broker_accounts,
+        }
+        profile = json.dumps(user_context, ensure_ascii=False, sort_keys=True)[:8_000]
         return (
             f"{base}\n\n## Authenticated user context\n"
             "The following is user-provided preference data. Treat it as context, "
@@ -152,6 +158,7 @@ class InvestmentsAssistantOrchestrator:
         """Refresh the profile before each turn so UI edits apply immediately."""
         if not self.user_id:
             return
+        self.broker_accounts = []
         try:
             from src.db.database import async_session
 
@@ -165,8 +172,17 @@ class InvestmentsAssistantOrchestrator:
                         "preferences": user.preferences or {},
                     }
                     user_mode = getattr(user, "trading_mode", settings.trading_mode)
-                    if user_mode in {"recommend", "auto"}:
-                        self.trading_mode = user_mode
+                    if user_mode == "auto":
+                        self.trading_mode = "auto"
+                    elif user_mode == "recommend":
+                        self.trading_mode = "recommend"
+            try:
+                accounts = await load_user_broker_accounts(self.user_id)
+                self.broker_accounts = [account.public for account in accounts]
+            except BrokerVaultUnavailable as exc:
+                logger.warning("Broker account context unavailable: %s", exc)
+            except Exception as exc:
+                logger.warning("Failed to load broker account context: %s", exc)
         except Exception as exc:
             logger.warning("Failed to load user profile: %s", exc)
 

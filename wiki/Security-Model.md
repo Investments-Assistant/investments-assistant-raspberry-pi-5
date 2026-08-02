@@ -154,10 +154,12 @@ accidentally share a model context. Profile text and JSON preferences are bounde
 are persisted and are treated as untrusted context by the model.
 
 Trading mode is stored per user and the dispatcher reads it from the authenticated context;
-changing one user's mode cannot silently change another user's mode. Broker credentials are
-still process-wide environment configuration, so a deployment with one `.env` represents a
-shared household brokerage account. Separate financial owners require separate deployments or
-a future encrypted per-user credential vault.
+changing one user's mode cannot silently change another user's mode. Brokerage credentials are
+stored per user in the `broker_accounts` table as Fernet-encrypted JSON. The dispatcher resolves
+only accounts owned by the authenticated user, and re-resolves the account when a recommended
+trade is confirmed. Multiple accounts for one provider require an explicit account ID; the
+server never guesses. If no account exists, the tool returns a capability explanation and does
+not fall back to another user's or the global account.
 
 ---
 
@@ -168,6 +170,14 @@ All secrets (API keys, database passwords) are stored in `.env` which is:
 - Mounted into the app container via `env_file: .env` in `docker-compose.yml`
 - Provided to GitHub Actions via **environment secrets** in the `dev` and `prod`
   environments (managed by OpenTofu in `core-infra`)
+
+`BROKER_CREDENTIALS_KEY` is the separate Fernet root key for user-managed brokerage records.
+Generate it with `scripts/create_broker_key.py`, keep it outside source control, and back it up
+offline. The database contains only ciphertext. Losing the key makes those stored credentials
+unrecoverable; changing it requires re-encrypting every account while the old key is still
+available. The legacy `ALPACA_*`, `IBKR_*`, `COINBASE_*`, and `BINANCE_*` environment settings
+remain only for scheduler/system calls without a user identity and are not inherited by logged-in
+users.
 
 **Database password**: `POSTGRES_PASSWORD` is required (not defaulted to a known string).
 Docker Compose enforces this with:

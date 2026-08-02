@@ -24,6 +24,9 @@ via `llama-cpp-python`. No external AI API or model sidecar is used.
 - **Multi-user persistence** — PostgreSQL-backed local accounts, per-user chat history,
   profile descriptions, JSON preferences, session isolation, and tab-scoped conversations;
   add accounts with `scripts/create_user.py`
+- **Per-user brokerage vault** — each authenticated user can add multiple Alpaca, IBKR,
+  Coinbase, or Binance accounts in the UI; credentials are Fernet-encrypted at rest,
+  masked in responses, and resolved only for that user's tool calls
 - **Scheduled evidence reviews** — market data refreshed every 5 min, news ingested hourly,
   and an hourly local review that records findings; execution remains server-guarded
 - **Weekly reports** — HTML + PDF with auditable data, assumptions, risks, and decisions
@@ -170,7 +173,9 @@ session IDs cannot cross user boundaries. The browser keeps the conversation ID 
 `sessionStorage`, which gives each tab its own conversation while allowing a refresh in that
 tab to restore the same history. Chat turns and trade audit rows are filtered by user ID.
 Trading mode is also persisted per user, so one person switching Recommend/Auto does not
-change another person's chat policy.
+change another person's chat policy. Each user's active brokerage accounts are loaded on
+every turn. If no account or required capability exists, the assistant explains the missing
+access and continues to support market/news/simulation analysis.
 
 The Pi intentionally loads one Qwen model and serializes model inference with a lock. Two
 users can stay connected and their database/network work remains asynchronous, but their CPU
@@ -184,10 +189,18 @@ regions, data transfer, and service overages vary, and Budgets notifications are
 than a hard spend firewall. Keeping history and profiles on the Pi is private and has no cloud
 bill.
 
-Broker credentials and portfolio adapters remain process-wide configuration. This deployment
-therefore models a shared household brokerage account with separate operator identities, not
-two independent broker accounts. Do not put separate people's broker credentials in one shared
-`.env`; that requires a future encrypted per-user broker-vault design.
+Broker credentials entered in the UI are encrypted with `BROKER_CREDENTIALS_KEY` before they
+are written to PostgreSQL. The UI and LLM receive only provider names, account labels, and
+masked field status. The old broker variables in `.env` remain only as a compatibility fallback
+for scheduler/system calls that have no authenticated user; authenticated users never inherit
+those global credentials. Generate the vault key with:
+
+```bash
+python3 scripts/create_broker_key.py
+```
+
+The key is required to manage accounts and must be backed up securely. Losing it makes stored
+broker credentials unrecoverable; rotating it requires a controlled re-encryption migration.
 
 ### Scheduled jobs
 
@@ -249,7 +262,8 @@ investments-assistant/
     │   ├── nft.py                    # local evidence-only NFT risk screen
     │   ├── market_data.py            # yfinance: OHLCV, indicators, options, earnings
     │   ├── news.py                   # RSS + optional adapters with sentiment analysis
-    │   ├── portfolio.py              # cross-broker portfolio aggregation
+│   ├── portfolio.py              # cross-broker portfolio aggregation
+│   ├── broker_accounts.py         # encrypted per-user account vault
     │   ├── alpaca.py                 # Alpaca Markets integration
     │   ├── ibkr.py                   # Interactive Brokers integration
     │   ├── coinbase.py               # Coinbase Advanced Trade integration
@@ -365,7 +379,7 @@ Key groups:
 | Trading | `TRADING_MODE`, `AUTO_MAX_TRADE_USD`, `AUTO_DAILY_LOSS_LIMIT_USD`, `LIVE_TRADING_ENABLED` |
 | Security | `ALLOWED_IPS`, `AUTH_USERNAME`, `AUTH_PASSWORD_HASH`, `AUTH_SESSION_SECRET`, `AUTH_SESSION_TTL_MINUTES` |
 | Database | `POSTGRES_PASSWORD` |
-| Brokers | `ALPACA_API_KEY`, `COINBASE_API_KEY`, `BINANCE_API_KEY`, `IBKR_ENABLED` |
+| Brokers | `BROKER_CREDENTIALS_KEY` plus per-user UI accounts; legacy `ALPACA_*`, `COINBASE_*`, `BINANCE_*`, `IBKR_*` only for system fallback |
 | News | RSS/HTML by default; optional `NEWS_API_ADAPTERS_ENABLED`, `NEWSAPI_KEY`, `GUARDIAN_API_KEY` |
 | Pi-hole | `PIHOLE_PASSWORD`, `TZ` |
 

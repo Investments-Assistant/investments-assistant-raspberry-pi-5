@@ -6,21 +6,38 @@ Set IBKR_ENABLED=false in .env to disable without errors.
 
 from __future__ import annotations
 
+from typing import Any
+
 from src.agent.utils.logger import get_logger
 from src.config import settings
+from src.tools.broker_accounts import BrokerAccountConfig
 
 logger = get_logger(__name__)
 
 
-def _get_ib():
+def _config(account: BrokerAccountConfig | None) -> dict:
+    return account.config if account else {
+        "host": settings.ibkr_host,
+        "port": settings.ibkr_port,
+        "client_id": settings.ibkr_client_id,
+        "enabled": settings.ibkr_enabled,
+    }
+
+
+def _enabled(account: BrokerAccountConfig | None = None) -> bool:
+    return bool(_config(account).get("enabled", False))
+
+
+def _get_ib(account: BrokerAccountConfig | None = None):
     """Connect to IB Gateway and return an IB instance."""
     from ib_insync import IB
 
     ib = IB()
+    config = _config(account)
     ib.connect(
-        host=settings.ibkr_host,
-        port=settings.ibkr_port,
-        clientId=settings.ibkr_client_id,
+        host=config.get("host", "127.0.0.1"),
+        port=int(config.get("port", 4002)),
+        clientId=int(config.get("client_id", 1)),
         timeout=10,
         readonly=False,
     )
@@ -35,13 +52,13 @@ def _disabled() -> dict:
     }
 
 
-def get_ibkr_account() -> dict:
-    if not settings.ibkr_enabled:
+def get_ibkr_account(account: BrokerAccountConfig | None = None) -> dict:
+    if not _enabled(account):
         return _disabled()
     try:
-        ib = _get_ib()
+        ib = _get_ib(account)
         summary = ib.accountSummary()
-        result: dict[str, object] = {"broker": "ibkr", "account": {}}
+        result: dict[str, Any] = {"broker": "ibkr", "account": {}}
         for item in summary:
             result["account"][item.tag] = item.value
         ib.disconnect()
@@ -61,11 +78,11 @@ def get_ibkr_account() -> dict:
         return {"broker": "ibkr", "error": str(exc)}
 
 
-def get_ibkr_positions() -> list[dict]:
-    if not settings.ibkr_enabled:
+def get_ibkr_positions(account: BrokerAccountConfig | None = None) -> list[dict]:
+    if not _enabled(account):
         return [_disabled()]
     try:
-        ib = _get_ib()
+        ib = _get_ib(account)
         portfolio = ib.portfolio()
         ib.disconnect()
         return [
@@ -87,11 +104,11 @@ def get_ibkr_positions() -> list[dict]:
         return [{"error": str(exc)}]
 
 
-def get_ibkr_orders() -> list[dict]:
-    if not settings.ibkr_enabled:
+def get_ibkr_orders(account: BrokerAccountConfig | None = None) -> list[dict]:
+    if not _enabled(account):
         return [_disabled()]
     try:
-        ib = _get_ib()
+        ib = _get_ib(account)
         trades = ib.trades()
         ib.disconnect()
         return [
@@ -130,13 +147,14 @@ def submit_ibkr_order(
     option_expiry: str | None = None,
     option_strike: float | None = None,
     option_right: str | None = None,
+    account: BrokerAccountConfig | None = None,
 ) -> dict:
-    if not settings.ibkr_enabled:
+    if not _enabled(account):
         return _disabled()
     try:
         from ib_insync import Forex, LimitOrder, MarketOrder, Option, Stock, StopLimitOrder
 
-        ib = _get_ib()
+        ib = _get_ib(account)
         normalized_asset_type = (asset_type or "").lower().strip()
         if normalized_asset_type == "option":
             if not option_expiry or option_strike is None or option_right not in {"C", "P"}:
@@ -192,11 +210,13 @@ def submit_ibkr_order(
         return {"success": False, "error": str(exc)}
 
 
-def cancel_ibkr_order(order_id: str) -> dict:
-    if not settings.ibkr_enabled:
+def cancel_ibkr_order(
+    order_id: str, account: BrokerAccountConfig | None = None
+) -> dict:
+    if not _enabled(account):
         return _disabled()
     try:
-        ib = _get_ib()
+        ib = _get_ib(account)
         open_trades = ib.openTrades()
         target = next((t for t in open_trades if str(t.order.orderId) == str(order_id)), None)
         if not target:

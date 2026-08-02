@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 from datetime import UTC, datetime
+from typing import Any
 
 import pandas as pd
 import ta
@@ -88,7 +89,7 @@ def get_market_overview() -> dict:
         "Ethereum": "ETH-USD",
         "Dollar Index": "DX-Y.NYB",
     }
-    result: dict[str, object] = {
+    result: dict[str, Any] = {
         "timestamp": datetime.now(UTC).isoformat(),
         "markets": {},
     }
@@ -276,7 +277,7 @@ def get_options_chain(symbol: str, expiry: str | None = None) -> dict:
         else:
             target_exps = list(exps[:3])  # next 3 expiries
 
-        result: dict[str, object] = {"symbol": symbol, "expiries": {}}
+        result: dict[str, Any] = {"symbol": symbol, "expiries": {}}
         for exp in target_exps:
             opt = ticker.option_chain(exp)
             result["expiries"][exp] = {
@@ -319,7 +320,7 @@ def search_ticker(query: str) -> dict:
 
 def get_earnings_calendar(days_ahead: int = 7, symbols: list[str] | None = None) -> dict:
     """Return upcoming earnings via yfinance (best-effort)."""
-    result: dict[str, object] = {"days_ahead": days_ahead, "earnings": []}
+    result: dict[str, Any] = {"days_ahead": days_ahead, "earnings": []}
     targets = symbols if symbols else []
     if not targets:
         # Return a note — full calendar requires premium data

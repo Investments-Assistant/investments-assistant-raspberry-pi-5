@@ -284,6 +284,13 @@ TOOL_DEFINITIONS = [
                     "description": "Filter by broker: alpaca, ibkr, coinbase, binance. If omitted, \
                         returns all.",
                 },
+                "account_id": {
+                    "type": "string",
+                    "description": (
+                        "Optional account ID from the authenticated user's Brokerage Accounts. "
+                        "Required when multiple accounts match."
+                    ),
+                },
             },
             "required": [],
         },
@@ -299,6 +306,13 @@ TOOL_DEFINITIONS = [
                     "enum": ["alpaca", "ibkr", "coinbase", "binance"],
                     "description": "Which broker account to query",
                 },
+                "account_id": {
+                    "type": "string",
+                    "description": (
+                        "Optional account ID; required when the user has multiple "
+                        "matching accounts."
+                    ),
+                },
             },
             "required": ["broker"],
         },
@@ -312,6 +326,13 @@ TOOL_DEFINITIONS = [
                 "broker": {
                     "type": "string",
                     "enum": ["alpaca", "ibkr", "coinbase", "binance"],
+                },
+                "account_id": {
+                    "type": "string",
+                    "description": (
+                        "Optional account ID; required when the user has multiple "
+                        "matching accounts."
+                    ),
                 },
                 "days": {
                     "type": "integer",
@@ -342,6 +363,13 @@ TOOL_DEFINITIONS = [
                     "description": (
                         "Which broker to route the order through. "
                         "Use ibkr for stocks, options, and forex pairs."
+                    ),
+                },
+                "account_id": {
+                    "type": "string",
+                    "description": (
+                        "Optional account ID from Brokerage Accounts. Required when multiple "
+                        "accounts exist for the selected broker."
                     ),
                 },
                 "symbol": {
@@ -418,6 +446,10 @@ TOOL_DEFINITIONS = [
                 "broker": {
                     "type": "string",
                     "enum": ["alpaca", "ibkr", "coinbase", "binance"],
+                },
+                "account_id": {
+                    "type": "string",
+                    "description": "Optional account ID; required when multiple accounts match.",
                 },
                 "order_id": {
                     "type": "string",

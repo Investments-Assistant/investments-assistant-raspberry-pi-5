@@ -32,6 +32,25 @@
       <div id="profile-status" class="profile-status"></div>
     </div>
 
+    <div class="sidebar-section broker-section">
+      <div class="section-title">Brokerage Accounts</div>
+      <div class="broker-help">Credentials are encrypted locally and never shown to the assistant.</div>
+      <div id="broker-accounts-list" class="broker-accounts-list">Loading…</div>
+      <select id="broker-provider" class="profile-input" onchange="renderBrokerFields()">
+        <option value="alpaca">Alpaca</option>
+        <option value="ibkr">Interactive Brokers</option>
+        <option value="coinbase">Coinbase</option>
+        <option value="binance">Binance</option>
+      </select>
+      <input id="broker-display-name" class="profile-input" placeholder="Account name (e.g. Long-term)" maxlength="128" />
+      <div id="broker-fields" class="broker-fields"></div>
+      <div class="broker-actions">
+        <button class="profile-save" onclick="saveBrokerAccount()">Save account</button>
+        <button id="broker-cancel" class="broker-cancel" onclick="resetBrokerForm()" hidden>Cancel edit</button>
+      </div>
+      <div id="broker-status" class="profile-status"></div>
+    </div>
+
     <div class="sidebar-section">
       <div class="section-title">Market Snapshot</div>
       <div id="market-snapshot" class="market-snapshot">Loading…</div>
