@@ -10,6 +10,14 @@ from src.config import settings
 logger = get_logger(__name__)
 
 
+def _configured() -> bool:
+    return bool(settings.alpaca_api_key and settings.alpaca_secret_key)
+
+
+def _not_configured() -> dict:
+    return {"broker": "alpaca", "error": "Alpaca credentials are not configured"}
+
+
 def _get_client():
     """Lazily create Alpaca trading client."""
     from alpaca.trading.client import TradingClient
@@ -22,6 +30,8 @@ def _get_client():
 
 
 def get_alpaca_account() -> dict:
+    if not _configured():
+        return _not_configured()
     try:
         client = _get_client()
         acc = client.get_account()
@@ -42,6 +52,8 @@ def get_alpaca_account() -> dict:
 
 
 def get_alpaca_positions() -> list[dict]:
+    if not _configured():
+        return [_not_configured()]
     try:
         client = _get_client()
         positions = client.get_all_positions()
@@ -64,6 +76,8 @@ def get_alpaca_positions() -> list[dict]:
 
 
 def get_alpaca_orders(days: int = 30) -> list[dict]:
+    if not _configured():
+        return [_not_configured()]
     try:
         from alpaca.trading.requests import GetOrdersRequest
 
@@ -100,6 +114,8 @@ def submit_alpaca_order(
     limit_price: float | None = None,
     stop_price: float | None = None,
 ) -> dict:
+    if not _configured():
+        return _not_configured()
     try:
         from alpaca.trading.enums import OrderSide, TimeInForce
         from alpaca.trading.requests import (
@@ -157,6 +173,8 @@ def submit_alpaca_order(
 
 
 def cancel_alpaca_order(order_id: str) -> dict:
+    if not _configured():
+        return _not_configured()
     try:
         client = _get_client()
         client.cancel_order_by_id(order_id)

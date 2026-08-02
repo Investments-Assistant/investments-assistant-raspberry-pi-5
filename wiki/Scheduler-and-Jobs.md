@@ -74,32 +74,30 @@ WEEKLY_REPORT_MINUTE=0
 
 ---
 
-### `autonomous_scan` — Mon–Fri 9am–5pm EST (every 30 min)
+### `autonomous_scan` — every hour (configurable)
 
 ```python
-trigger=CronTrigger(
-    day_of_week="mon-fri",
-    hour="14-21",   # 9am–5pm EST = 14:00–21:00 UTC
-    minute="*/30",  # every 30 minutes
-    timezone="UTC",
-)
+trigger=IntervalTrigger(minutes=settings.autonomous_scan_interval_minutes)
 ```
 
-**Only runs in `AUTO` mode.** In `RECOMMEND` mode, `_autonomous_scan()` returns
-immediately without calling the LLM.
+The review runs in both trading modes when `AUTONOMOUS_SCANS_ENABLED=true`. It is a local
+evidence review, not a promise to trade: in recommend mode it can leave short-lived proposals
+that require an authenticated user confirmation; in auto mode the dispatcher still applies
+the symbol, loss-halt, notional, order-type, route, and audit guards.
 
 **What it does**: creates (or reuses) an orchestrator session with the ID
 `"autonomous_scanner"` and sends the prompt:
 
-> "Perform a proactive market scan. Check market overview, scan for technical signals on
-> major stocks and crypto. If you identify a compelling trade opportunity with a strong
-> risk/reward profile, execute it. Document your full reasoning."
+> "Perform the hourly autonomous investment review. Check stored global news, market
+> overview, portfolio exposure, and technical data across stocks, ETFs, options, crypto,
+> and FX. Identify material risks and opportunities, state uncertainty, and never bypass
+> server-side trade controls."
 
 The agent then runs its full tool-use loop — checking markets, news, technicals — and
 may call `execute_trade` if it finds something compelling.
 
 **Important**: the autonomous scanner uses a **shared session** (`"autonomous_scanner"`)
-that accumulates history across all 30-minute runs during the trading day. This gives
+that accumulates history across hourly runs. This gives
 the scanner context about what it already checked this morning. The session resets on
 process restart.
 
@@ -107,26 +105,27 @@ process restart.
 writes an `Analysis` row to the database with `trigger="scheduled"` and the full response
 text as `summary`. This creates a queryable audit trail of every autonomous scan.
 
-**Safety**: `execute_trade` in auto mode respects `AUTO_ALLOWED_SYMBOLS` and the daily
-loss-limit halt flag. If `DailyPnL.auto_trading_halted` is `True`, all trade calls are
-blocked until the next calendar day.
+**Safety**: `execute_trade` in auto mode respects `AUTO_ALLOWED_SYMBOLS`, the daily
+loss-limit halt flag, notional and order-type caps, paper/testnet routing, and the
+pre-trade database audit intent. If `DailyPnL.auto_trading_halted` is `True`, all auto
+trade calls are blocked until the next calendar day.
 
 ---
 
-### `news_ingestion` — every 30 minutes
+### `news_ingestion` — every hour by default
 
 ```python
-trigger=IntervalTrigger(minutes=30)
+trigger=IntervalTrigger(minutes=settings.news_ingestion_minutes)
 misfire_grace_time=120
 ```
 
-**What it does**: calls `run_ingestion(days_back=1)` which fetches articles from all 21
-RSS feeds, the Guardian API, and the two scraped sites, then inserts new articles into
+**What it does**: calls `run_ingestion(days_back=1)` which fetches articles from the RSS
+feeds and the two scraped sites, then inserts new articles into
 `news_articles` (duplicates silently skipped).
 
-**30-minute interval**: balances freshness vs. API rate limits. The Guardian free tier
-allows 500 requests/day; 5 sections × 48 runs/day = 240 requests/day — well within limit.
-RSS feeds have no explicit rate limits but excessive polling is discouraged.
+**Hourly interval**: balances freshness with polite source polling. NewsAPI and Guardian
+adapters are disabled by default (`NEWS_API_ADAPTERS_ENABLED=false`); enabling them is an
+explicit exception to the no-news-API profile.
 
 **`misfire_grace_time=120`**: 2 minutes. News ingestion can take 10–20 seconds (many
 HTTP requests). If it runs past the next fire time, it's allowed 2 minutes before the

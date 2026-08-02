@@ -1,13 +1,18 @@
-# MCP Integration
+# MCP Integration (optional, disabled by default)
 
-The investment assistant exposes all 18 agent tools to **Claude Desktop** and **Claude Code**
+This path is **not part of the local-only investment expert**. MCP lets a third-party
+desktop model call tools on the Pi, so enabling it can send portfolio context outside the
+Pi through that client. Keep `MCP_ENABLED=false` to enforce the local-reasoning profile and
+use the authenticated Web UI instead.
+
+The investment assistant exposes all 23 agent tools to **Claude Desktop** and **Claude Code**
 via the **Model Context Protocol (MCP)**.
 
-This means you can open Claude Desktop on your laptop and say:
+If you explicitly accept that boundary, you can open Claude Desktop on your laptop and say:
 > "Check the technical indicators for AAPL and run a buy-and-hold simulation since 2022"
 
 Claude Desktop will call the investment assistant's tools on the Pi, fetch real data, and
-respond with a full analysis — all through your WireGuard VPN.
+respond with a full analysis — while the external desktop model sees the returned context.
 
 ---
 
@@ -42,9 +47,8 @@ The server runs **locally on your laptop** (not in Docker on the Pi). This is in
 ## Why MCP?
 
 Claude Desktop natively supports MCP (Model Context Protocol) — it can call tools defined
-in an MCP server and incorporate the results into its responses. This lets you use
-Claude's full capabilities (Claude 3.5 Sonnet, Claude 3 Opus) against your investment
-data, rather than the local 7B model running on the Pi.
+in an MCP server and incorporate the results into its responses. This uses an external model
+against the tools rather than the local model running on the Pi.
 
 Use cases:
 - Deeper analysis that benefits from a frontier model's reasoning
@@ -124,7 +128,7 @@ def _to_mcp_tools(definitions):
     ]
 ```
 
-This means there's one source of truth for all 18 tool schemas. When a new tool is added
+This means there's one source of truth for all 23 tool schemas. When a new tool is added
 to `definitions.py`, it automatically becomes available in Claude Desktop without any
 changes to the MCP server.
 
@@ -168,7 +172,7 @@ Then in a Claude Code session:
 
 ## Limitations
 
-- All 18 tools are exposed — including `execute_trade`. Claude Desktop (using Claude
+- All 23 tools are exposed — including `execute_trade`. Claude Desktop (using Claude
   Opus/Sonnet) can place real orders if `TRADING_MODE=auto` on the Pi. Be aware of this
   when using MCP in auto mode.
 - The MCP server has no authentication of its own — it inherits the IP whitelist from

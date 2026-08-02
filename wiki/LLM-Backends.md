@@ -41,3 +41,19 @@ LLM_N_BATCH=128
 AGENT_MAX_TOKENS=2048
 AGENT_TEMPERATURE=0.1
 ```
+
+## Fine-tuning decision
+
+Fine-tuning is not part of the Pi runtime. A fine-tuned model would still need
+fresh prices, filings, news, portfolio state, and broker constraints; training
+on historical recommendations can also bake in stale facts and hindsight
+bias. The safer and more maintainable approach is a general instruct model,
+strict tool schemas, deterministic server-side trade limits, persistent news
+memory, and backtests/paper trading. If a later dataset justifies adaptation,
+train and evaluate it off-device, export a quantised GGUF, and validate tool
+calling and risk controls on the Pi before replacing the model.
+
+The selected GGUF must include a tool-aware chat template. If the model emits
+plain text instead of structured tool calls, inspect its template metadata or
+choose a model with native function-calling support; do not let the assistant
+execute trades through text parsing.

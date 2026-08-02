@@ -28,6 +28,10 @@ function connect() {
 
   ws.onclose = (e) => {
     setStatus('offline');
+    if (e.code === 4001 || e.code === 4003) {
+      window.location.assign('/login');
+      return;
+    }
     if (e.code !== 1000) {
       reconnectTimer = setTimeout(() => {
         reconnectDelay = Math.min(reconnectDelay * 1.5, MAX_RECONNECT);
@@ -181,7 +185,7 @@ async function setMode(mode) {
   document.getElementById('btn-auto').classList.toggle('active', mode === 'auto');
   const statusEl = document.getElementById('mode-status');
   statusEl.textContent = mode === 'auto'
-    ? '⚡ Auto mode — agent will execute trades within safety limits.'
+    ? '⚡ Auto mode — only bounded, configured trades can execute.'
     : '✋ Recommend mode — agent proposes, you confirm.';
 
   if (ws?.readyState === WebSocket.OPEN) {
@@ -199,6 +203,7 @@ async function loadSnapshot() {
   el.textContent = 'Loading…';
   try {
     const resp = await fetch('/api/market/snapshot');
+    if (resp.status === 401) { window.location.assign('/login'); return; }
     const data = await resp.json();
     if (data.message) { el.textContent = data.message; return; }
     const markets = data.market_overview?.markets || {};
@@ -220,10 +225,51 @@ async function loadSnapshot() {
   }
 }
 
+async function loadSafety() {
+  try {
+    const resp = await fetch('/api/safety');
+    if (resp.status === 401) { window.location.assign('/login'); return; }
+    if (!resp.ok) return;
+    const policy = await resp.json();
+    const mode = policy.trading_mode;
+    document.getElementById('btn-recommend').classList.toggle('active', mode === 'recommend');
+    document.getElementById('btn-auto').classList.toggle('active', mode === 'auto');
+    document.getElementById('mode-status').textContent = policy.daily_halted
+      ? '🛑 Auto-trading is halted for today.'
+      : mode === 'auto'
+        ? `Auto mode · cap $${policy.auto_max_trade_usd} · live ${policy.live_trading_enabled ? 'enabled' : 'disabled'}`
+        : 'Recommend mode — every order needs explicit confirmation.';
+  } catch (e) {
+    console.error('Safety policy load failed', e);
+  }
+}
+
+function csrfToken() {
+  const match = document.cookie.match(/(?:^|; )ia_csrf=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : '';
+}
+
+async function activateKillSwitch() {
+  if (!window.confirm('Block all future autonomous orders for the rest of today?')) return;
+  try {
+    const resp = await fetch('/api/safety/kill-switch', {
+      method: 'POST',
+      headers: {'X-CSRF-Token': csrfToken()},
+    });
+    if (resp.status === 401) { window.location.assign('/login'); return; }
+    if (!resp.ok) throw new Error('Kill switch could not be persisted.');
+    const data = await resp.json();
+    document.getElementById('mode-status').textContent = `🛑 ${data.message}`;
+  } catch (error) {
+    appendErrorMessage(error.message);
+  }
+}
+
 async function loadReports() {
   const el = document.getElementById('reports-list');
   try {
     const resp = await fetch('/api/reports');
+    if (resp.status === 401) { window.location.assign('/login'); return; }
     const reports = await resp.json();
     if (!reports.length) { el.textContent = 'No reports yet.'; return; }
     el.innerHTML = reports.slice(0, 5).map(r => `
@@ -325,6 +371,7 @@ function toggleSidebar() {
 globalThis.addEventListener('DOMContentLoaded', () => {
   connect();
   loadSnapshot();
+  loadSafety();
   loadReports();
   setInterval(loadSnapshot, 5 * 60 * 1000); // auto-refresh every 5 min
   setSendEnabled(true);

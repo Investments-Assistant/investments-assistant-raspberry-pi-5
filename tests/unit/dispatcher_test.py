@@ -12,6 +12,7 @@ from src.tools.dispatcher import (
     _execute_trade,
     _route_order,
     _set_trading_mode,
+    _validate_trade_input,
     dispatch_tool,
 )
 
@@ -101,6 +102,38 @@ class TestRouteOrder:
 
         assert result == {"order_id": "ibkr-1"}
 
+    def test_ibkr_option_fields_are_forwarded(self):
+        mock_submit = MagicMock(return_value={"order_id": "ibkr-option-1"})
+        with patch("src.tools.dispatcher.ibkr_tool") as mock_ibkr:
+            mock_ibkr.submit_ibkr_order = mock_submit
+            result = _route_order(
+                "ibkr",
+                "AAPL",
+                "buy",
+                1.0,
+                "limit",
+                2.50,
+                None,
+                "option",
+                "2026-08-21",
+                200.0,
+                "C",
+            )
+
+        assert result == {"order_id": "ibkr-option-1"}
+        mock_submit.assert_called_once_with(
+            "AAPL",
+            "buy",
+            1.0,
+            "limit",
+            2.50,
+            None,
+            asset_type="option",
+            option_expiry="2026-08-21",
+            option_strike=200.0,
+            option_right="C",
+        )
+
     def test_coinbase_dispatched(self):
         mock_submit = MagicMock(return_value={"order_id": "cb-1"})
         with patch("src.tools.dispatcher.coinbase") as mock_cb:
@@ -170,6 +203,67 @@ class TestExecuteTrade:
         base.update(overrides)
         return base
 
+    def test_validates_ibkr_option_contract(self):
+        trade, error = _validate_trade_input(
+            self._trade_input(
+                broker="ibkr",
+                symbol="AAPL",
+                asset_type="option",
+                option_expiry="2026-08-21",
+                option_strike=200,
+                option_right="C",
+                order_type="limit",
+                limit_price=2.50,
+            )
+        )
+
+        assert error is None
+        assert trade["asset_type"] == "option"
+        assert trade["option_expiry"] == "2026-08-21"
+        assert trade["option_strike"] == 200.0
+        assert trade["option_right"] == "C"
+
+    @pytest.mark.parametrize(
+        ("overrides", "message"),
+        [
+            (
+                {
+                    "broker": "alpaca",
+                    "asset_type": "option",
+                    "option_expiry": "2026-08-21",
+                    "option_strike": 200,
+                    "option_right": "C",
+                },
+                "require broker",
+            ),
+            (
+                {
+                    "broker": "ibkr",
+                    "asset_type": "option",
+                    "option_expiry": "2026-02-30",
+                    "option_strike": 200,
+                    "option_right": "C",
+                },
+                "valid calendar",
+            ),
+            (
+                {
+                    "broker": "ibkr",
+                    "asset_type": "option",
+                    "option_expiry": "2026-08-21",
+                    "option_strike": 200,
+                    "option_right": "X",
+                },
+                "'C' or 'P'",
+            ),
+        ],
+    )
+    def test_rejects_invalid_option_contract(self, overrides, message):
+        _, error = _validate_trade_input(self._trade_input(**overrides))
+
+        assert error is not None
+        assert message.lower() in error.lower()
+
     async def test_recommend_mode_returns_pending_confirmation(self):
         with patch("src.tools.dispatcher.settings") as mock_cfg:
             mock_cfg.trading_mode = "recommend"
@@ -224,7 +318,7 @@ class TestExecuteTrade:
         assert "blocked" not in result
 
     async def test_db_persist_failure_does_not_raise(self):
-        """A DB failure during persist should be swallowed — trade result is still returned."""
+        """A DB outage blocks auto-trading instead of bypassing the loss guard."""
         mock_order = {"order_id": "x", "status": "submitted"}
         with patch("src.tools.dispatcher.settings") as mock_cfg:
             mock_cfg.trading_mode = "auto"
@@ -236,5 +330,31 @@ class TestExecuteTrade:
                 ):
                     result = await _execute_trade(self._trade_input())
 
-        # Trade result should still be returned despite DB error
-        assert result["order_id"] == "x"
+        assert result["blocked"] is True
+        assert "database" in result["reason"].lower() or "halt" in result["reason"].lower()
+
+    async def test_auto_mode_enforces_notional_cap(self):
+        with patch("src.tools.dispatcher.settings") as mock_cfg:
+            mock_cfg.trading_mode = "auto"
+            mock_cfg.auto_allowed_symbols_set = {"AAPL"}
+            mock_cfg.auto_allow_market_orders = False
+            mock_cfg.auto_max_trade_usd = 500.0
+            with patch("src.tools.dispatcher._is_daily_halted", new=AsyncMock(return_value=False)):
+                result = await _execute_trade(
+                    self._trade_input(quantity=3, order_type="limit", limit_price=200)
+                )
+
+        assert result["blocked"] is True
+        assert "cap" in result["reason"]
+
+    async def test_auto_mode_blocks_market_order_by_default(self):
+        with patch("src.tools.dispatcher.settings") as mock_cfg:
+            mock_cfg.trading_mode = "auto"
+            mock_cfg.auto_allowed_symbols_set = {"AAPL"}
+            mock_cfg.auto_allow_market_orders = False
+            mock_cfg.auto_max_trade_usd = 500.0
+            with patch("src.tools.dispatcher._is_daily_halted", new=AsyncMock(return_value=False)):
+                result = await _execute_trade(self._trade_input())
+
+        assert result["blocked"] is True
+        assert "market" in result["reason"].lower()

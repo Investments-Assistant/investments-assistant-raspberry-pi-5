@@ -8,6 +8,14 @@ from src.config import settings
 logger = get_logger(__name__)
 
 
+def _configured() -> bool:
+    return bool(settings.binance_api_key and settings.binance_secret_key)
+
+
+def _not_configured() -> dict:
+    return {"broker": "binance", "error": "Binance credentials are not configured"}
+
+
 def _get_client():
     from binance.client import Client
 
@@ -20,6 +28,8 @@ def _get_client():
 
 
 def get_binance_account() -> dict:
+    if not _configured():
+        return _not_configured()
     try:
         client = _get_client()
         info = client.get_account()
@@ -54,6 +64,8 @@ def get_binance_positions() -> list[dict]:
 
 
 def get_binance_orders(symbol: str | None = None) -> list[dict]:
+    if not _configured():
+        return [_not_configured()]
     try:
         client = _get_client()
         if symbol:
@@ -95,6 +107,8 @@ def submit_binance_order(
     """
     symbol: Binance trading pair e.g. 'BTCUSDT'
     """
+    if not _configured():
+        return _not_configured()
     try:
         from binance.enums import (
             ORDER_TYPE_LIMIT,
@@ -144,6 +158,8 @@ def submit_binance_order(
 
 
 def cancel_binance_order(order_id: str, symbol: str = "BTCUSDT") -> dict:
+    if not _configured():
+        return _not_configured()
     try:
         client = _get_client()
         result = client.cancel_order(symbol=symbol.upper(), orderId=int(order_id))

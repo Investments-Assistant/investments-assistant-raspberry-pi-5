@@ -1,14 +1,18 @@
-# MCP Server Setup — Claude Desktop & Claude Code
+# MCP Server Setup — Claude Desktop & Claude Code (optional)
 
-The investment assistant can expose all 18 of its tools to **Claude Desktop** or **Claude Code**
+> This is deliberately disabled by default. MCP delegates analysis to an external desktop
+> model and conflicts with a strict “all reasoning local” deployment. Use the built-in
+> authenticated Web UI unless you intentionally accept that external model path.
+
+The investment assistant can expose all 23 of its tools to **Claude Desktop** or **Claude Code**
 via the [Model Context Protocol](https://modelcontextprotocol.io) (MCP).
 
-This lets you use Claude (Opus / Sonnet) for analysis and conversation while all tool
-execution — market data, broker queries, trade execution — runs on the Pi.
-**No portfolio data ever leaves your network.**
+This lets you use Claude (Opus / Sonnet) for analysis while tool execution runs on the Pi.
+Portfolio/tool results may be visible to that external model; do not enable this for a
+strict local-only installation.
 
-The local LLM interface (`https://10.8.0.1`) continues to work exactly as before.
-MCP is an additional, optional access path.
+The local LLM interface (`https://10.8.0.1`) remains the default access path. MCP is an
+additional, explicitly opt-in access path.
 
 ---
 
@@ -51,7 +55,8 @@ Add the `investment-assistant` server to the `mcpServers` block:
       "args": [
         "/absolute/path/to/investments-assistant/scripts/mcp_server.py",
         "--base-url", "https://10.8.0.1",
-        "--no-verify-ssl"
+        "--no-verify-ssl",
+        "--auth-token", "<MCP_AUTH_TOKEN>"
       ]
     }
   }
@@ -90,7 +95,7 @@ Add to your project or global Claude Code settings (`.claude/settings.json`):
 
 ## 4. Verify
 
-In Claude Desktop, open a new chat. You should see the 18 investment-assistant tools
+In Claude Desktop, open a new chat. You should see the 23 investment-assistant tools
 available in the tool picker. Try:
 
 > "What is the current market overview?"
@@ -126,10 +131,10 @@ Claude will call `get_market_overview` on your Pi and return the result.
 
 ## Security Note
 
-The `/api/tools/invoke` endpoint on the Pi is protected by the same IP whitelist as all
-other routes — it only accepts connections from the WireGuard VPN subnet (`10.8.0.1/24`)
-and your LAN. The MCP server on your laptop connects over the VPN, so this is satisfied
-automatically when WireGuard is active.
+The `/api/tools/invoke` endpoint on the Pi is protected by the WireGuard IP allowlist and
+requires `MCP_ENABLED=true` plus the matching strong `MCP_AUTH_TOKEN` bearer token. The
+browser fallback requires the normal signed session and CSRF token. The MCP server on your
+laptop must be connected over the VPN.
 
 The `execute_trade` tool respects the `TRADING_MODE` setting on the Pi:
 - `recommend` mode — returns a pending confirmation, never executes directly

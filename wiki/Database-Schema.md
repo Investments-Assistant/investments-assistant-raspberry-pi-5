@@ -161,11 +161,10 @@ Tracks daily realised and unrealised P&L for the auto-trading safety system.
 | `auto_trading_halted` | Boolean | If true, all auto-mode `execute_trade` calls are blocked |
 | `updated_at` | DateTime(tz) | `onupdate=_now` — tracks when P&L was last recalculated |
 
-**How the halt works**: after each auto-mode sell trade, `_check_and_enforce_daily_limit()`
-in the dispatcher updates `realized_usd` and sets `auto_trading_halted = True` if
-`realized_usd < -AUTO_DAILY_LOSS_LIMIT_USD`. From that point, `_is_daily_halted()` blocks
-every further `execute_trade` call for the rest of the calendar day. The flag is not reset
-programmatically — each new day gets a fresh row, so the halt expires naturally at midnight.
+**How the halt works**: `_is_daily_halted()` blocks auto-trading when the stored flag is true
+and fails closed if the database cannot be checked. The dispatcher updates `realized_usd`
+only when a broker adapter returns an explicit realized-P&L value; order submission alone is
+not treated as a fill. Each new day gets a fresh row, so a prior-day halt expires naturally.
 
 The `auto_trading_halted` flag can also be set manually via a direct DB update if you want
 to pause autonomous trading outside of a loss event.
@@ -181,7 +180,7 @@ The persistent news memory store.
 | `id` | UUID | Primary key |
 | `title` | String(500) | Article title (truncated at 500 chars) |
 | `summary` | Text | Short excerpt (up to 2,000 chars from RSS/scraper) |
-| `content` | Text | Full body text (up to 5,000 chars from Guardian API) |
+| `content` | Text | Full body text when an enabled source supplies it |
 | `source` | String(100) | Source name, indexed |
 | `url` | String(1000) | Unique — deduplication key |
 | `published_at` | DateTime(tz) | Publication date (nullable — some sources omit it) |

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -27,14 +28,18 @@ def get_latest_snapshot() -> dict:
     return _latest_snapshot
 
 
-def _refresh_market_data() -> None:
+async def _refresh_market_data() -> None:
     """Pull latest market overview + major news. Runs every N minutes."""
     global _latest_snapshot
     logger.info("Scheduled: refreshing market data")
     try:
-        overview = get_market_overview()
-        btc_news = search_market_news("Bitcoin crypto market", max_articles=5)
-        stock_news = search_market_news("stock market S&P 500", max_articles=5)
+        # yfinance and the RSS reader are synchronous adapters.  Run them in
+        # worker threads so a slow provider cannot stall WebSocket responses.
+        overview, btc_news, stock_news = await asyncio.gather(
+            asyncio.to_thread(get_market_overview),
+            asyncio.to_thread(search_market_news, "Bitcoin crypto market", max_articles=5),
+            asyncio.to_thread(search_market_news, "stock market S&P 500", max_articles=5),
+        )
         _latest_snapshot = {
             "timestamp": datetime.now(UTC).isoformat(),
             "market_overview": overview,
@@ -78,8 +83,8 @@ async def _ingest_newsletter() -> None:
 
 
 async def _autonomous_scan() -> None:
-    """When in AUTO mode, scan markets and act if opportunities are found."""
-    if settings.trading_mode != "auto":
+    """Run a local evidence review; execution remains server-guarded."""
+    if not settings.autonomous_scans_enabled:
         return
     logger.info("Scheduled: autonomous market scan")
     try:
@@ -87,9 +92,13 @@ async def _autonomous_scan() -> None:
 
         session = get_or_create_session("autonomous_scanner")
         prompt = (
-            "Perform a proactive market scan. Check market overview, scan for technical "
-            "signals on major stocks and crypto. If you identify a compelling trade opportunity "
-            "with a strong risk/reward profile, execute it. Document your full reasoning."
+            "Perform the hourly autonomous investment review. Check the latest stored global "
+            "news, market overview, portfolio exposure, and technical data for configured "
+            "assets. Identify material risks, thesis invalidations, and opportunities across "
+            "stocks, ETFs, options, crypto, and FX. Use evidence and state uncertainty. "
+            f"Current mode is {settings.trading_mode}. In recommend mode, record proposals "
+            "but do not attempt to confirm them. In auto mode, only use execute_trade when "
+            "the server-side limits can be satisfied; never bypass a blocked result."
         )
         text_parts: list[str] = []
         async for event in session.chat(prompt):
@@ -148,26 +157,26 @@ def setup_scheduler() -> None:
         replace_existing=True,
     )
 
-    # Autonomous market scan (every 30 min during market hours Mon–Fri)
+    # Autonomous review (hourly by default, including global/crypto markets)
     scheduler.add_job(
         _autonomous_scan,
-        trigger=CronTrigger(
-            day_of_week="mon-fri",
-            hour="14-21",  # 9am–5pm EST = 14–21 UTC
-            minute="*/30",
-            timezone="UTC",
-        ),
+        trigger=IntervalTrigger(minutes=settings.autonomous_scan_interval_minutes),
         id="autonomous_scan",
         replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300,
     )
 
-    # News memory ingestion (every 30 minutes, 24/7)
+    # News memory ingestion (hourly by default, 24/7)
     scheduler.add_job(
         _ingest_news,
-        trigger=IntervalTrigger(minutes=30),
+        trigger=IntervalTrigger(minutes=settings.news_ingestion_minutes),
         id="news_ingestion",
         replace_existing=True,
         misfire_grace_time=120,
+        max_instances=1,
+        coalesce=True,
     )
 
     # Newsletter email reader (every Saturday at 09:00 UTC = ~10am Lisbon time)

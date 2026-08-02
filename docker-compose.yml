@@ -52,7 +52,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)\"",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/ready', timeout=5)\"",
         ]
       interval: 30s
       timeout: 10s
@@ -69,7 +69,7 @@ services:
     ports:
       - "53:53/tcp"      # DNS
       - "53:53/udp"      # DNS
-      - "8080:80/tcp"    # Pi-hole Web UI (LAN only — firewall-protected)
+      - "127.0.0.1:8080:80/tcp" # Pi-hole admin UI is host-local; use SSH tunnel
     environment:
       TZ: ${TZ:-Europe/Lisbon}
       WEBPASSWORD: ${PIHOLE_PASSWORD:?Set PIHOLE_PASSWORD in .env}

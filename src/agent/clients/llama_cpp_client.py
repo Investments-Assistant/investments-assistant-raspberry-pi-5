@@ -80,6 +80,7 @@ class LlamaCppClient(BaseLLMClient):
             n_batch=settings.llm_n_batch,
             verbose=False,
         )
+        self._inference_lock = asyncio.Lock()
         logger.info("GGUF model loaded")
 
     async def stream_response(
@@ -94,18 +95,21 @@ class LlamaCppClient(BaseLLMClient):
             *messages,
         ]
 
-        while True:
+        completed = False
+        max_rounds = max(1, settings.agent_max_tool_rounds)
+        for _round_number in range(max_rounds):
             # llama-cpp is synchronous — run in thread pool to keep event loop free.
-            response = await loop.run_in_executor(
-                None,
-                lambda msgs=full_messages: self._llm.create_chat_completion(
-                    messages=msgs,
-                    tools=_TOOLS,
-                    tool_choice="auto",
-                    max_tokens=settings.agent_max_tokens,
-                    temperature=settings.agent_temperature,
-                ),
-            )
+            async with self._inference_lock:
+                response = await loop.run_in_executor(
+                    None,
+                    lambda msgs=full_messages: self._llm.create_chat_completion(
+                        messages=msgs,
+                        tools=_TOOLS,
+                        tool_choice="auto",
+                        max_tokens=settings.agent_max_tokens,
+                        temperature=settings.agent_temperature,
+                    ),
+                )
 
             choice = response["choices"][0]
             message = choice["message"]
@@ -126,6 +130,7 @@ class LlamaCppClient(BaseLLMClient):
             tool_calls: list[dict] = message.get("tool_calls") or []
             if finish_reason != "tool_calls" or not tool_calls:
                 yield {"type": "done"}
+                completed = True
                 break
 
             # Dispatch every tool call and feed results back.
@@ -140,6 +145,11 @@ class LlamaCppClient(BaseLLMClient):
 
                 yield {"type": "tool_call", "name": tool_name, "input": tool_input, "id": tool_id}
                 result_str = await dispatch_tool(tool_name, tool_input)
+                if len(result_str) > settings.agent_max_tool_result_chars:
+                    result_str = (
+                        result_str[: settings.agent_max_tool_result_chars]
+                        + "\n[tool result truncated for local context budget]"
+                    )
                 yield {
                     "type": "tool_result",
                     "name": tool_name,
@@ -152,6 +162,15 @@ class LlamaCppClient(BaseLLMClient):
                 )
 
             full_messages.extend(tool_result_messages)
+
+        if not completed:
+            logger.warning("Agent stopped after %d tool rounds", max_rounds)
+            yield {
+                "type": "text_delta",
+                "text": "I stopped the tool loop after reaching the local safety limit. "
+                "Please narrow the request or ask me to continue.",
+            }
+            yield {"type": "done"}
 
 
 def get_llama_cpp_client() -> LlamaCppClient:

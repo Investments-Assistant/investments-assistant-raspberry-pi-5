@@ -8,6 +8,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
+from src.web.auth import hash_password
+
 # ---------------------------------------------------------------------------
 # Test application — router-only, no lifespan (no DB/scheduler at startup)
 # ---------------------------------------------------------------------------
@@ -75,6 +77,53 @@ class TestHealthEndpoint:
             data = client.get("/api/health").json()
 
         assert data["trading_mode"] == "auto"
+
+
+@pytest.mark.unit
+class TestAuthenticationEndpoints:
+    def _settings(self):
+        cfg = MagicMock()
+        cfg.is_development = False
+        cfg.is_production = True
+        cfg.is_ip_allowed = MagicMock(return_value=True)
+        cfg.trust_proxy_headers = False
+        cfg.auth_username = "admin"
+        cfg.auth_password_hash = hash_password("a-long-and-private-password")
+        cfg.auth_session_secret = "test-session-secret"
+        cfg.auth_session_ttl_minutes = 10
+        cfg.auth_require_login = True
+        cfg.auth_cookie_secure = False
+        return cfg
+
+    def test_invalid_login_is_generic(self):
+        cfg = self._settings()
+        with (
+            patch("src.web.routes.settings", cfg),
+            patch("src.web.auth.config.settings", cfg),
+        ):
+            response = _make_client().post(
+                "/api/auth/login",
+                json={"username": "admin", "password": "wrong-password"},
+            )
+        assert response.status_code == 401
+        assert response.json()["detail"] == "Invalid ID or password"
+
+    def test_login_issues_session_and_me_endpoint_accepts_it(self):
+        cfg = self._settings()
+        with (
+            patch("src.web.routes.settings", cfg),
+            patch("src.web.auth.config.settings", cfg),
+        ):
+            client = _make_client()
+            response = client.post(
+                "/api/auth/login",
+                json={"username": "admin", "password": "a-long-and-private-password"},
+            )
+            assert response.status_code == 200
+            assert client.get("/api/auth/me").json() == {
+                "authenticated": True,
+                "username": "admin",
+            }
 
 
 # ---------------------------------------------------------------------------

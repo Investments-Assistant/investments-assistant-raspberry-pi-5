@@ -58,6 +58,28 @@ TOOL_DEFINITIONS = [
             "required": ["symbols"],
         },
     },
+    {
+        "name": "assess_nft_risk",
+        "description": (
+            "Assess NFT collection liquidity, concentration, and volatility risks from "
+            "caller-supplied metrics. This is evidence-only: it does not fetch marketplace "
+            "data, verify authenticity, value an NFT, or place NFT orders."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "collection": {"type": "string", "description": "Collection name"},
+                "floor_price_usd": {"type": "number", "minimum": 0},
+                "floor_change_7d_pct": {"type": "number"},
+                "volume_7d_usd": {"type": "number", "minimum": 0},
+                "sales_7d": {"type": "integer", "minimum": 0},
+                "holders": {"type": "integer", "minimum": 0},
+                "top_holder_pct": {"type": "number", "minimum": 0},
+                "bid_ask_spread_pct": {"type": "number", "minimum": 0},
+            },
+            "required": ["collection"],
+        },
+    },
     # ── Forex ──────────────────────────────────────────────────────────────────
     {
         "name": "get_forex_data",
@@ -110,9 +132,9 @@ TOOL_DEFINITIONS = [
     {
         "name": "get_central_bank_rates",
         "description": (
-            "Return central bank policy rates for major currencies and compute "
-            "carry-trade differentials ranked by annualised carry. "
-            "Use this to identify which currency pairs offer the best carry opportunity."
+            "Return static reference central bank rates and compute indicative carry "
+            "differentials. The result is educational only, may be stale, and must never "
+            "be used as an automatic trade trigger without live official confirmation."
         ),
         "input_schema": {
             "type": "object",
@@ -307,7 +329,9 @@ TOOL_DEFINITIONS = [
             "Execute a buy or sell order via a brokerage. "
             "In RECOMMEND mode this creates a pending recommendation requiring user confirmation. "
             "In AUTO mode this submits the order directly. "
-            "For forex pairs (e.g. 'EUR/USD', 'GBPUSD') use broker='ibkr'."
+            "For forex pairs (e.g. 'EUR/USD', 'GBPUSD') and options use broker='ibkr'. "
+            "Option orders require asset_type='option', option_expiry, option_strike, "
+            "and option_right."
         ),
         "input_schema": {
             "type": "object",
@@ -326,6 +350,28 @@ TOOL_DEFINITIONS = [
                         "Ticker or trading pair, e.g. 'AAPL', 'BTC-USD', 'BTCUSDT', "
                         "'EUR/USD', 'GBPUSD'"
                     ),
+                },
+                "asset_type": {
+                    "type": "string",
+                    "enum": ["stock", "etf", "option", "forex", "crypto"],
+                    "description": (
+                        "Asset class. Defaults to stock; forex is inferred for six-letter "
+                        "IBKR pairs. "
+                        "Use option for an IBKR option contract."
+                    ),
+                },
+                "option_expiry": {
+                    "type": "string",
+                    "description": "Option expiration in YYYY-MM-DD format (IBKR only).",
+                },
+                "option_strike": {
+                    "type": "number",
+                    "description": "Option strike price (IBKR only).",
+                },
+                "option_right": {
+                    "type": "string",
+                    "enum": ["C", "P"],
+                    "description": "Option right: C for call or P for put (IBKR only).",
                 },
                 "side": {
                     "type": "string",
@@ -351,6 +397,13 @@ TOOL_DEFINITIONS = [
                 "reason": {
                     "type": "string",
                     "description": "Mandatory: explain WHY this trade is being placed",
+                },
+                "estimated_notional_usd": {
+                    "type": "number",
+                    "description": (
+                        "Estimated USD value of the order. Required for bounded auto mode "
+                        "when a limit price is not available."
+                    ),
                 },
             },
             "required": ["broker", "symbol", "side", "quantity", "reason"],
@@ -378,52 +431,19 @@ TOOL_DEFINITIONS = [
         "name": "confirm_trade",
         "description": (
             "Execute a trade that was previously recommended and is pending user confirmation. "
-            "Call this ONLY after the user explicitly says to confirm or proceed with the trade. "
-            "Pass the trade_details object exactly as returned in the pending_confirmation \
-                response."
+            "Call this ONLY after the user explicitly approves the recommendation and provides "
+            "the confirmation_id returned by execute_trade. The server ignores arbitrary trade "
+            "parameters and uses the short-lived proposal it created."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "broker": {
+                "confirmation_id": {
                     "type": "string",
-                    "enum": ["alpaca", "ibkr", "coinbase", "binance"],
-                    "description": (
-                        "Which broker to route the order through. "
-                        "Use ibkr for stocks, options, and forex pairs."
-                    ),
-                },
-                "symbol": {
-                    "type": "string",
-                    "description": ("Ticker or trading pair, e.g. 'AAPL', 'BTC-USD', 'EUR/USD'"),
-                },
-                "side": {
-                    "type": "string",
-                    "enum": ["buy", "sell"],
-                },
-                "quantity": {
-                    "type": "number",
-                    "description": "Number of shares / coins",
-                },
-                "order_type": {
-                    "type": "string",
-                    "enum": ["market", "limit", "stop_limit"],
-                    "default": "market",
-                },
-                "limit_price": {
-                    "type": "number",
-                    "description": "Limit price (required for limit / stop_limit orders)",
-                },
-                "stop_price": {
-                    "type": "number",
-                    "description": "Stop trigger price (required for stop_limit orders)",
-                },
-                "reason": {
-                    "type": "string",
-                    "description": "The original reasoning for this trade",
+                    "description": "Short-lived server-generated ID from execute_trade",
                 },
             },
-            "required": ["broker", "symbol", "side", "quantity"],
+            "required": ["confirmation_id"],
         },
     },
     # ── Simulation ─────────────────────────────────────────────────────────────
@@ -450,8 +470,8 @@ TOOL_DEFINITIONS = [
                     "description": (
                         "Strategy parameters. Supported types: "
                         "'buy_and_hold', 'sma_crossover' (params: fast, slow), "
-                        "'rsi_mean_reversion' (params: rsi_buy, rsi_sell), "
-                        "'momentum' (params: lookback_days)"
+                        "'rsi_mean_reversion' (params: rsi_buy, rsi_sell), or "
+                        "'momentum' (params: lookback_days, top_n)."
                     ),
                     "properties": {
                         "type": {"type": "string"},

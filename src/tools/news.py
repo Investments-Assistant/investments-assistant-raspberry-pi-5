@@ -6,7 +6,6 @@ from datetime import UTC, datetime, timedelta
 import re
 
 import feedparser
-from newsapi import NewsApiClient
 
 from src.agent.utils.logger import get_logger
 from src.config import settings
@@ -138,9 +137,13 @@ def _fetch_rss(query: str, max_articles: int) -> list[dict]:
 
 def _fetch_newsapi(query: str, max_articles: int) -> list[dict]:
     """Fetch articles from NewsAPI (requires API key)."""
-    if not settings.newsapi_key:
+    if not settings.newsapi_key or not bool(
+        getattr(settings, "news_api_adapters_enabled", False)
+    ):
         return []
     try:
+        from newsapi import NewsApiClient
+
         client = NewsApiClient(api_key=settings.newsapi_key)
         from_date = (datetime.now(UTC) - timedelta(days=7)).strftime("%Y-%m-%d")
         resp = client.get_everything(

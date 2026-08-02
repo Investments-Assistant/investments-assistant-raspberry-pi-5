@@ -84,7 +84,7 @@ python_files = ["test_*.py", "*_test.py"]
 addopts = "-v"
 pythonpath = ["."]
 asyncio_mode = "auto"
-asyncio_default_fixture_loop_scope = "function"
+asyncio_default_fixture_loop_scope = "session"
 markers = [
     "unit: Pure unit tests with no external dependencies",
     "integration: Integration tests requiring a live PostgreSQL database",

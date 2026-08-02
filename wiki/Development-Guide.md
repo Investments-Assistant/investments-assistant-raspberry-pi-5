@@ -77,7 +77,7 @@ src/
 │
 ├── tools/
 │   ├── __init__.py          # dispatch_tool() export
-│   ├── definitions.py       # 18 tool schemas
+│   ├── definitions.py       # 23 tool schemas
 │   ├── dispatcher.py        # Routes tool calls to implementations
 │   ├── market_data.py       # yfinance tools
 │   ├── news.py              # Live news search

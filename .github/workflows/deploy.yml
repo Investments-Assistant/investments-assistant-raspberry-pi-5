@@ -72,7 +72,7 @@ jobs:
         run: |
           cd "$DEPLOY_DIR"
           docker compose exec -T app python -c \
-            "import json, urllib.request; print(json.dumps(json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)), indent=2))"
+            "import json, urllib.request; print(json.dumps(json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/ready', timeout=5)), indent=2))"
 
       - name: Print local image id
         run: docker image inspect investment-assistant:pi --format='{{.Id}}'

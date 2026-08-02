@@ -17,14 +17,8 @@ ListenPort = 51820
 # Server private key: cat /etc/wireguard/server_private.key
 PrivateKey = <SERVER_PRIVATE_KEY>
 
-# NAT: lets VPN clients reach the internet through the Pi
-# Change eth0 to your actual LAN interface (ip link show to find it)
-PostUp   = iptables -A FORWARD -i %i -j ACCEPT; \
-           iptables -A FORWARD -o %i -j ACCEPT; \
-           iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-PostDown = iptables -D FORWARD -i %i -j ACCEPT; \
-           iptables -D FORWARD -o %i -j ACCEPT; \
-           iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+# Host-only VPN: clients can reach the Pi's private services, but the Pi is
+# not an internet gateway. Keep client AllowedIPs at 10.8.0.0/24.
 
 # ── Peer: Your Phone ──────────────────────────────────────────────────────────
 [Peer]

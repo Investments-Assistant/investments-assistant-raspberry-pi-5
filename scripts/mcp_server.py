@@ -2,7 +2,7 @@
 """
 Investment Assistant MCP Server
 
-Exposes all 18 investment-assistant tools to Claude Desktop / Claude Code
+Exposes all 23 investment-assistant tools to Claude Desktop / Claude Code
 via the Model Context Protocol (stdio transport).
 
 Run on your laptop (not the Pi) — it forwards tool calls to the Pi over VPN:
@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -45,19 +46,23 @@ def _to_mcp_tools(definitions: list[dict]) -> list:
     ]
 
 
-async def _call_tool(base_url: str, tool_name: str, arguments: dict, verify_ssl: bool) -> str:
+async def _call_tool(
+    base_url: str, tool_name: str, arguments: dict, verify_ssl: bool, auth_token: str
+) -> str:
     """POST to the Pi's /api/tools/invoke and return the raw result string."""
     async with httpx.AsyncClient(verify=verify_ssl, timeout=60.0) as client:
+        headers = {"Authorization": f"Bearer {auth_token}"} if auth_token else {}
         response = await client.post(
             f"{base_url}/api/tools/invoke",
             json={"tool_name": tool_name, "tool_input": arguments},
+            headers=headers,
         )
         response.raise_for_status()
         payload = response.json()
         return payload.get("result", json.dumps(payload))
 
 
-def build_server(base_url: str, verify_ssl: bool):
+def build_server(base_url: str, verify_ssl: bool, auth_token: str):
     from mcp import types
     from mcp.server import Server
 
@@ -70,7 +75,7 @@ def build_server(base_url: str, verify_ssl: bool):
     @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         try:
-            result = await _call_tool(base_url, name, arguments, verify_ssl)
+            result = await _call_tool(base_url, name, arguments, verify_ssl, auth_token)
         except httpx.HTTPStatusError as exc:
             result = json.dumps(
                 {
@@ -85,10 +90,10 @@ def build_server(base_url: str, verify_ssl: bool):
     return server
 
 
-async def main(base_url: str, verify_ssl: bool) -> None:
+async def main(base_url: str, verify_ssl: bool, auth_token: str) -> None:
     from mcp.server.stdio import stdio_server
 
-    server = build_server(base_url, verify_ssl)
+    server = build_server(base_url, verify_ssl, auth_token)
 
     async with stdio_server() as (read_stream, write_stream):
         await server.run(
@@ -110,6 +115,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Disable SSL certificate verification (needed for self-signed certs)",
     )
+    parser.add_argument(
+        "--auth-token",
+        default=os.environ.get("MCP_AUTH_TOKEN", ""),
+        help="Bearer token configured as MCP_AUTH_TOKEN on the Pi",
+    )
     args = parser.parse_args()
 
     verify_ssl = not args.no_verify_ssl
@@ -120,4 +130,6 @@ if __name__ == "__main__":
 
         warnings.filterwarnings("ignore", category=urllib3.exceptions.InsecureRequestWarning)
 
-    asyncio.run(main(args.base_url, verify_ssl))
+    if not args.auth_token:
+        parser.error("--auth-token or MCP_AUTH_TOKEN is required")
+    asyncio.run(main(args.base_url, verify_ssl, args.auth_token))

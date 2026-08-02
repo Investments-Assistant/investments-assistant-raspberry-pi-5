@@ -1,9 +1,9 @@
-"""News source adapters: RSS feeds, The Guardian API, and web scraping.
+"""News source adapters: RSS feeds, optional APIs, and web scraping.
 
 Sources are deliberately layered:
 1. RSS    — structured, always available, no API key needed
-2. Guardian API — full article text, free key (500 req/day)
-3. Web scraping — fallback for open-access sites with no RSS/API
+2. Web scraping — open-access sites with no RSS feed
+3. Guardian API — optional full article text, disabled by default
 
 Financial Times and Bloomberg are paywalled; only their RSS headlines
 are fetched (no scraping — would violate their ToS).
@@ -11,6 +11,7 @@ are fetched (no scraping — would violate their ToS).
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 import re
 from typing import Any
@@ -244,7 +245,9 @@ async def fetch_guardian(days_back: int = 1) -> list[dict[str, Any]]:
 
     Set GUARDIAN_API_KEY in .env — obtain at https://open-platform.theguardian.com/
     """
-    if not settings.guardian_api_key:
+    if not settings.guardian_api_key or not bool(
+        getattr(settings, "news_api_adapters_enabled", False)
+    ):
         return []
 
     since = (datetime.now(UTC) - timedelta(days=days_back)).strftime("%Y-%m-%d")
@@ -347,10 +350,15 @@ async def fetch_scraped(max_per_site: int = 10) -> list[dict[str, Any]]:
 
 async def fetch_all(days_back: int = 1) -> list[dict[str, Any]]:
     """Collect articles from all sources. Called by the ingestion scheduler."""
-    results: list[dict[str, Any]] = []
-    results.extend(fetch_rss())
-    results.extend(await fetch_guardian(days_back=days_back))
-    results.extend(await fetch_scraped())
+    # feedparser's URL mode is synchronous.  Keep it off the FastAPI event
+    # loop and fetch the async adapters concurrently so a slow source cannot
+    # stall the chat UI or the scheduler.
+    rss, guardian, scraped = await asyncio.gather(
+        asyncio.to_thread(fetch_rss),
+        fetch_guardian(days_back=days_back),
+        fetch_scraped(),
+    )
+    results: list[dict[str, Any]] = [*rss, *guardian, *scraped]
     # Drop articles with no URL (unfilterable duplicates)
     seen: set[str] = set()
     deduped: list[dict[str, Any]] = []

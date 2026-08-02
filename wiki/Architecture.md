@@ -2,8 +2,10 @@
 
 ## Why a Raspberry Pi 5?
 
-The core design requirement was **full data sovereignty**: brokerage API keys, portfolio
-data, chat history, and trade reasoning must never leave the home network. Running on a
+The core design requirement was **local reasoning and controlled data egress**: brokerage
+API keys, portfolio data, chat history, and trade reasoning stay on the Pi. Market/news
+feeds and explicitly configured broker connections are the only intentional external data
+paths. Running on a
 Raspberry Pi 5 achieves this at minimal cost (~$80) with low idle power (~5 W).
 
 The Pi 5 uses a quad-core Cortex-A76 ARM64 CPU. This is important because
@@ -55,7 +57,8 @@ control-plane complexity has no benefit at this scale.
 ┌── app (container, :8000) ───────────────────────────────────┐
 │                                                              │
 │  FastAPI application                                         │
-│   ├─ GET /               → serves index.html                 │
+│   ├─ GET /               → authenticated index.html          │
+│   ├─ GET /login          → ID/password login                 │
 │   ├─ GET /static/*       → CSS / JS                          │
 │   ├─ WS  /ws/chat/{id}   → streaming chat                    │
 │   ├─ GET /api/health     → liveness probe                    │
@@ -71,7 +74,7 @@ control-plane complexity has no benefit at this scale.
 │                                                              │
 │  Tool Dispatcher                                             │
 │   ├─ market_data.py      yfinance                           │
-│   ├─ news.py             RSS + NewsAPI                      │
+│   ├─ news.py             RSS + optional adapters             │
 │   ├─ news_memory.py      PostgreSQL FTS                     │
 │   ├─ portfolio.py        cross-broker aggregator            │
 │   ├─ brokers/alpaca.py   alpaca-py SDK                      │
@@ -82,8 +85,8 @@ control-plane complexity has no benefit at this scale.
 │                                                              │
 │  APScheduler (in-process async scheduler)                    │
 │   ├─ every 5 min   → market snapshot                        │
-│   ├─ every 30 min  → news ingestion                         │
-│   ├─ Mon–Fri 9–5   → autonomous scan (auto mode)            │
+│   ├─ every 60 min  → news ingestion                          │
+│   ├─ every 60 min  → local autonomous evidence review        │
 │   ├─ Sunday 18:00  → weekly report                          │
 │   └─ Saturday 9am  → newsletter email ingestion             │
 └───────────────────────────────────────────────────────────────┘
@@ -103,7 +106,7 @@ control-plane complexity has no benefit at this scale.
          │
 ┌── pihole ───────┐
 │  DNS :53        │
-│  Web UI :8080   │
+│  Web UI 127.0.0.1:8080 (SSH tunnel) │
 └─────────────────┘
 ```
 

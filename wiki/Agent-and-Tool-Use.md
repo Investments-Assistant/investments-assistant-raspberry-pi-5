@@ -49,8 +49,8 @@ The `InvestmentsAssistantOrchestrator` class manages one chat session. It:
 
 **Session registry**: a module-level `_sessions: dict[str, Orchestrator]` dict maps
 `session_id` → `Orchestrator`. Sessions are created on first WebSocket connection and
-persist for the lifetime of the process. Sessions are **not** evicted — in a single-user
-home setup this is fine; for multi-user deployments you'd want an LRU eviction policy.
+are bounded to 128 in-memory objects. Older objects are evicted if a VPN client rotates
+IDs; durable history remains in PostgreSQL and is restored on reconnect.
 
 **History restoration**: on WebSocket connect, `load_history_from_db()` queries
 `chat_messages` ordered by `created_at` and rebuilds the in-memory history. This means
@@ -90,7 +90,7 @@ compensate for the reduced world-model of a 7B model compared to a 70B+ model.
 
 ## Tool definitions (`src/tools/definitions.py`)
 
-All 19 tools are defined as JSON Schema objects in a single list `TOOL_DEFINITIONS`.
+All 23 tools are defined as JSON Schema objects in a single list `TOOL_DEFINITIONS`.
 Each definition follows the Claude/Anthropic format:
 ```json
 {
@@ -133,7 +133,7 @@ This means there is one source of truth (`TOOL_DEFINITIONS`) and two consumers:
 The dispatcher maps tool names to Python callables. It separates sync and async tools:
 
 - `_SYNC_DISPATCH`: tools whose implementations are synchronous (yfinance, ta, broker SDKs).
-  These are called directly without `await`.
+  These run in worker threads so slow data providers do not block the event loop.
 - `_ASYNC_DISPATCH`: tools that use `async with async_session()` — the news memory tools.
 - Special-cased: `execute_trade`, `confirm_trade`, `cancel_order`, `generate_report` have
   non-trivial logic (safety checks, DB persistence, report generation) that warrants their
@@ -148,9 +148,9 @@ that data is unavailable, etc.).
 
 ## Trading mode safety
 
-### AUTO mode — three guards applied in order
+### AUTO mode — server-side guards applied in order
 
-In `AUTO` mode, `_execute_trade()` runs three checks before routing the order:
+In `AUTO` mode, `_execute_trade()` runs several checks before routing the order:
 
 1. **Symbol allowlist**: if `AUTO_ALLOWED_SYMBOLS` is non-empty, only those tickers can
    be traded autonomously. An attempt to trade an unlisted symbol returns
@@ -161,12 +161,20 @@ In `AUTO` mode, `_execute_trade()` runs three checks before routing the order:
    message. The flag is set automatically by `_check_and_enforce_daily_limit()` when
    `realized_usd` drops below `-AUTO_DAILY_LOSS_LIMIT_USD`.
 
-3. **Per-trade size limit**: enforced via the system prompt (`AUTO_MAX_TRADE_USD`). The
-   LLM is instructed not to exceed this in a single `execute_trade` call.
+3. **Per-trade size and order-type limit**: the server, not the prompt, requires a positive
+   notional estimate or limit price, enforces `AUTO_MAX_TRADE_USD`, and blocks market orders
+   unless `AUTO_ALLOW_MARKET_ORDERS=true`.
 
-After each auto-mode sell trade, `_check_and_enforce_daily_limit()` updates `realized_usd`
-and sets `auto_trading_halted = True` if the daily limit is breached. The flag resets on
-the next calendar day because each day has a fresh `daily_pnl` row.
+4. **Route and audit guards**: live-money routes require `LIVE_TRADING_ENABLED=true`;
+   paper/testnet routes are selected explicitly by broker settings. A pending trade intent
+   must be committed to PostgreSQL before any broker call. If the database is unavailable,
+   the order is not sent. A failed post-order finalization is surfaced as an audit warning.
+
+The daily halt flag is fail-closed: a database error blocks auto-trading. Realized P&L is
+updated only when a broker adapter returns an explicit realized-P&L value; the current order
+submission adapters do not invent P&L from an unfilled order. Production use should add
+broker-specific fill reconciliation before relying on the daily loss limit as a complete
+accounting system.
 
 ### RECOMMEND mode — confirm/cancel flow
 
@@ -184,9 +192,10 @@ In `RECOMMEND` mode, `execute_trade` never routes to a broker. It returns:
 ```
 
 The LLM presents the recommendation to the user. When the user replies "confirm trade",
-the LLM calls `confirm_trade` with the `trade_details` object. `confirm_trade` executes
-directly via `_route_order()` — no mode guard, no allowlist check — and persists the
-trade with `mode="manual"`. The daily halt flag is not applied to user-confirmed trades.
+the LLM must call `confirm_trade` with the short-lived, server-generated `confirmation_id`.
+The server ignores user-supplied replacement trade fields, binds the proposal to the
+originating chat session, and persists the manual order intent before routing it. This
+prevents confirmation of an arbitrary or cross-session order.
 
 ---
 

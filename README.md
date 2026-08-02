@@ -2,8 +2,9 @@
 
 A private, home-hosted investment assistant that runs entirely on a **Raspberry Pi 5**.
 It monitors stock, ETF, crypto, and options markets in real time, executes or recommends
-trades through four broker integrations, and is accessible from anywhere in the world
-through a private WireGuard VPN — with no data leaving your network.
+trades through four optional broker integrations, and is accessible from anywhere in the world
+through a private WireGuard VPN. The local model and reasoning stay on the Pi; only explicitly
+configured market, news, newsletter, or broker connections leave the network.
 
 LLM inference is **fully local**: GGUF models are loaded directly into process memory
 via `llama-cpp-python`. No external AI API or model sidecar is used.
@@ -12,19 +13,21 @@ via `llama-cpp-python`. No external AI API or model sidecar is used.
 
 ## Features
 
-- **18 agent tools** — market data, technical indicators, options chains, news sentiment,
+- **23 agent tools** — market data, technical indicators, options chains, NFT risk, news sentiment,
   portfolio management, trade execution, backtesting, report generation
 - **4 broker integrations** — Alpaca (stocks/ETFs), Interactive Brokers (stocks/options),
   Coinbase (crypto), Binance (crypto)
 - **Two trading modes** — `recommend` (agent proposes, you confirm) or `auto` (agent
   executes within configurable safety limits)
-- **Real-time streaming chat** — FastAPI + WebSocket; token-by-token response
-- **Scheduled autonomous scans** — market data refreshed every 5 min; optional autonomous
-  market scanning in auto mode
-- **Weekly reports** — HTML + PDF with full reasoning transparency
-- **Pi-hole** — network-wide DNS ad blocker for every device on your LAN
+- **Authenticated chat UI** — FastAPI + WebSocket with ID/password login, signed sessions,
+  CSRF protection, origin checks, and VPN-only access
+- **Scheduled evidence reviews** — market data refreshed every 5 min, news ingested hourly,
+  and an hourly local review that records findings; execution remains server-guarded
+- **Weekly reports** — HTML + PDF with auditable data, assumptions, risks, and decisions
+- **Pi-hole** — optional DNS ad blocker for VPN clients (admin via SSH tunnel)
 - **WireGuard VPN** — private, cryptographically authenticated remote access from anywhere
-- **No cloud dependency** — the LLM runs on-device; your data stays home
+- **No cloud AI dependency** — the LLM runs on-device; outbound traffic is limited to the
+  configured market/news/broker data paths
 
 ---
 
@@ -49,7 +52,7 @@ via `llama-cpp-python`. No external AI API or model sidecar is used.
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │  Nginx  (Docker container, port 443)                                │   │
 │  │  • TLS termination (self-signed cert)                               │   │
-│  │  • IP whitelist: 10.8.0.0/24, 192.168.0.0/16                       │   │
+│  │  • IP whitelist: WireGuard 10.8.0.0/24 only                         │   │
 │  │  • Rate limiting: 60 req/min general, 10 WebSocket connections      │   │
 │  └───────────────────────────────┬─────────────────────────────────────┘   │
 │                                  │  proxy_pass → :8000                     │
@@ -97,8 +100,8 @@ via `llama-cpp-python`. No external AI API or model sidecar is used.
 │  │  APScheduler  (in-process)          │   │  ┌────────────────┐  │   │   │
 │  │                                     │   │  │ Trade Execution│  │   │   │
 │  │  every 5 min  → market snapshot     │   │  │ execute_trade  │  │   │   │
-│  │  every 30 min → news ingestion      │   │  │ cancel_order   │  │   │   │
-│  │  Mon-Fri 9-5  → autonomous scan     │   │  └────────────────┘  │   │   │
+│  │  every 60 min → news ingestion       │   │  │ cancel_order   │  │   │   │
+│  │  every 60 min → autonomous review    │   │  └────────────────┘  │   │   │
 │  │  Sunday 18:00 → weekly PDF report   │   │  ┌────────────────┐  │   │   │
 │  │  Saturday 9am → newsletter email    │   │  │ Analysis       │  │   │   │
 │  └─────────────────────────────────────┘   │  │ run_simulation │  │   │   │
@@ -111,17 +114,17 @@ via `llama-cpp-python`. No external AI API or model sidecar is used.
 │  └────────────────┘                                                    │   │
 │                                                                         │   │
 │  ┌─────────────────────────────────────────────────────────────────┐   │   │
-│  │  Pi-hole  (Docker container, port 53 / 8080)                    │   │   │
-│  │  Network-wide DNS ad blocking for all LAN devices               │   │   │
+│  │  Pi-hole  (Docker port 53; admin via SSH tunnel)                 │   │   │
+│  │  Optional DNS for VPN clients only                               │   │   │
 │  └─────────────────────────────────────────────────────────────────┘   │   │
 │                                                                         │   │
 └─────────────────────────────────────────────────────────────────────────────┘
-              │ outbound only (no inbound ports except 51820)
+              │ configured egress only; public inbound is WireGuard UDP 51820
               ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  EXTERNAL DATA SOURCES  (read-only, no auth data sent)                      │
+│  EXTERNAL DATA SOURCES  (only explicitly configured connections)             │
 │                                                                             │
-│  Yahoo Finance (yfinance)    NewsAPI / Guardian API    RSS feeds            │
+│  Yahoo Finance (yfinance)    RSS feeds / HTML scraping                      │
 │  Alpaca Markets API          Coinbase Advanced API     Binance API          │
 │  Interactive Brokers TWS     IMAP (newsletter emails)                       │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -141,14 +144,14 @@ User types message
   • passes history + system prompt to LLM
        │
        ▼
-  LLM Backend  ←─── system prompt + conversation history + 18 tool schemas
+  LLM Backend  ←─── system prompt + conversation history + 23 tool schemas
   (ReAct loop)
        │
        ├─ finish_reason == "tool_calls" ──► Tool Dispatcher ──► broker / yfinance / news
        │       ▲                                                        │
        │       └────────────── tool result fed back ───────────────────┘
        │
-       └─ finish_reason == "stop" ──► text streamed token-by-token to browser
+       └─ finish_reason == "stop" ──► response events streamed to browser
                                    ──► persisted to PostgreSQL
 ```
 
@@ -158,8 +161,8 @@ User types message
 APScheduler (runs inside FastAPI process)
 │
 ├── every 5 min     → get_market_overview() + top news   → _latest_snapshot cache
-├── every 30 min    → RSS / NewsAPI ingestion             → PostgreSQL news store
-├── Mon–Fri 9–5 EST → autonomous scan (auto mode only)   → may execute trades
+├── every 60 min     → RSS / HTML ingestion                → PostgreSQL news store
+├── every 60 min     → autonomous local evidence review    → PostgreSQL analysis store
 ├── Sunday 18:00    → weekly report (LLM + tools + PDF)  → PostgreSQL + /app/reports
 └── Saturday 09:00  → IMAP email reader (newsletters)    → PostgreSQL news store
 ```
@@ -205,10 +208,11 @@ investments-assistant/
     │   └── prompts.py                # system prompt + weekly report prompt
     │
     ├── tools/
-    │   ├── definitions.py            # 18 tool schemas + OpenAI format converter
+    │   ├── definitions.py            # 23 tool schemas + OpenAI format converter
     │   ├── dispatcher.py             # routes tool calls to implementations
+    │   ├── nft.py                    # local evidence-only NFT risk screen
     │   ├── market_data.py            # yfinance: OHLCV, indicators, options, earnings
-    │   ├── news.py                   # RSS + NewsAPI with sentiment analysis
+    │   ├── news.py                   # RSS + optional adapters with sentiment analysis
     │   ├── portfolio.py              # cross-broker portfolio aggregation
     │   ├── alpaca.py                 # Alpaca Markets integration
     │   ├── ibkr.py                   # Interactive Brokers integration
@@ -256,18 +260,34 @@ Tested models on Pi 5 (8 GB RAM):
 | `mistral-7b` | ~4.4 GB | Solid all-rounder |
 | `llama3.1-8b` | ~4.9 GB | Strong tool use |
 
+### Local-only boundary and fine-tuning
+
+There is no AI API, remote model server, embedding service, or cloud reasoning path in the
+default deployment. RSS/HTML feeds are used for news; market quotes and any account/order
+execution require the explicitly configured external data or brokerage connection. If a
+strictly air-gapped installation is required, leave broker credentials empty, keep
+`LIVE_TRADING_ENABLED=false`, and use analysis/backtesting only.
+
+Fine-tuning is not part of runtime. On a Pi 5, a verified tool-aware base model plus grounded
+local data is safer and easier to update than a fine-tuned model that may memorize stale prices
+or learn unsafe order behavior. Fine-tuning can be evaluated off-device later, but only with a
+versioned dataset, held-out risk tests, and a model that still emits structured tool calls.
+
 ## Security Model
 
-The app is **not publicly reachable**. The only port forwarded on your router is
-**UDP 51820** (WireGuard). Everything else is blocked at four layers:
+The app is **not publicly reachable**. The only port forwarded on your router should be
+**UDP 51820** (WireGuard). A separate ID/password login is still required after the VPN
+connection; a WireGuard private key is not a substitute for the application password.
+Everything else is blocked at four layers:
 
 1. **WireGuard** — silently drops all packets from unknown peers (no response to attackers)
 2. **DOCKER-USER iptables** — kernel-level drop of 80/443 from non-VPN IPs, even if Docker binds to `0.0.0.0`
 3. **Nginx IP whitelist** — application-layer check; rate limiting (60 req/min)
-4. **FastAPI `is_ip_allowed()`** — belt-and-suspenders in-process check
+4. **FastAPI `is_ip_allowed()` + signed session** — in-process VPN and identity checks;
+   state-changing browser requests also require CSRF validation
 
-Authentication = your WireGuard private key. No passwords. No exposed login page.
-See [config/wireguard/setup.md](config/wireguard/setup.md) for full setup instructions.
+Generate the password hash and session secret with `scripts/create_auth_hash.py`.
+See [config/wireguard/setup.md](config/wireguard/setup.md) for the VPN setup.
 
 ---
 
@@ -303,11 +323,11 @@ Key groups:
 | Group | Variables |
 | --- | --- |
 | LLM | `LLM_MODEL_PATH`, `LLM_CONTEXT_SIZE`, `LLM_N_THREADS`, `AGENT_MAX_TOKENS` |
-| Trading | `TRADING_MODE`, `AUTO_MAX_TRADE_USD`, `AUTO_DAILY_LOSS_LIMIT_USD` |
-| Security | `ALLOWED_IPS` |
+| Trading | `TRADING_MODE`, `AUTO_MAX_TRADE_USD`, `AUTO_DAILY_LOSS_LIMIT_USD`, `LIVE_TRADING_ENABLED` |
+| Security | `ALLOWED_IPS`, `AUTH_USERNAME`, `AUTH_PASSWORD_HASH`, `AUTH_SESSION_SECRET` |
 | Database | `POSTGRES_PASSWORD` |
 | Brokers | `ALPACA_API_KEY`, `COINBASE_API_KEY`, `BINANCE_API_KEY`, `IBKR_ENABLED` |
-| News | `NEWSAPI_KEY` |
+| News | RSS/HTML by default; optional `NEWS_API_ADAPTERS_ENABLED`, `NEWSAPI_KEY`, `GUARDIAN_API_KEY` |
 | Pi-hole | `PIHOLE_PASSWORD`, `TZ` |
 
 ---

@@ -16,13 +16,12 @@ There is **no response, no banner, no error** — to a network scanner, the port
 closed. An attacker cannot even confirm WireGuard is running. Compare this to an SSH
 server which at minimum responds with its version banner.
 
-Authentication is based entirely on **Curve25519 public keys** — there are no passwords,
-no login forms, no brute-force vectors.
+WireGuard authenticates the network peer with **Curve25519 public keys**. The application
+then requires a separate ID/password login, so possession of a VPN key alone does not
+open the investment console.
 
-**Pre-shared key (PSK)**: on top of the asymmetric key exchange, an optional 256-bit
-symmetric PSK is mixed into the session key derivation. This provides **post-quantum
-security**: even if Curve25519 is broken in the future (quantum computers), an attacker
-would also need the PSK to decrypt historical traffic.
+**Pre-shared key (PSK)**: an optional 256-bit symmetric PSK adds another secret to the
+session key derivation. It is defense in depth, not a claim of post-quantum security.
 
 **Network topology**:
 ```
@@ -46,15 +45,15 @@ IP that can reach the Pi — including the public internet (if the router forwar
 which it should not, but misconfigurations happen).
 
 `scripts/setup.sh` adds rules to the `DOCKER-USER` chain that drop all traffic to ports
-80 and 443 except from the VPN subnet and LAN:
+80 and 443 except from the VPN subnet:
 
 ```bash
-# Drop 80/443 unless from VPN or LAN
+# Drop 80/443 unless from the VPN
 iptables -I DOCKER-USER -p tcp --dport 80 -j DROP
 iptables -I DOCKER-USER -p tcp --dport 443 -j DROP
 iptables -I DOCKER-USER -p tcp --dport 80 -s 10.8.0.0/24 -j ACCEPT
 iptables -I DOCKER-USER -p tcp --dport 443 -s 10.8.0.0/24 -j ACCEPT
-iptables -I DOCKER-USER -p tcp --dport 443 -s 192.168.0.0/16 -j ACCEPT
+# Pi-hole DNS is similarly restricted to VPN clients (UDP and TCP 53).
 ```
 
 These rules operate at the **kernel netfilter level** — before any application code
@@ -70,7 +69,6 @@ the packet.
 ```nginx
 set $allowed 0;
 if ($remote_addr ~* ^10\.8\.0\.)    { set $allowed 1; }  # WireGuard VPN
-if ($remote_addr ~* ^192\.168\.)    { set $allowed 1; }  # LAN
 if ($remote_addr ~* ^172\.(1[6-9]|2[0-9]|3[01])\.) { set $allowed 1; }  # Docker bridge
 if ($allowed = 0) { return 403; }
 ```
@@ -104,7 +102,7 @@ within Docker.
 
 ---
 
-## Layer 4: FastAPI IP check
+## Layer 4: FastAPI IP check and application authentication
 
 ```python
 def require_allowed_ip(request: Request) -> None:
@@ -113,8 +111,8 @@ def require_allowed_ip(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Access denied")
 ```
 
-This is the innermost defence — a Python function that runs as a FastAPI dependency
-on every request. It parses `X-Forwarded-For` (set by Nginx's
+This is the innermost network defence — a Python function that runs as a FastAPI dependency
+on every private request. It parses `X-Forwarded-For` (set by Nginx's
 `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`) to get the real client IP.
 
 `settings.is_ip_allowed()` uses Python's `ipaddress.ip_address` / `ip_network` to
@@ -135,6 +133,17 @@ async def websocket_chat(websocket, session_id):
 In **development mode** (`ENVIRONMENT=development`), the IP check is skipped — making
 it easy to run the app locally without setting up VPN. The FastAPI `/docs` and
 `/openapi.json` endpoints are also enabled only in development mode.
+
+### Browser authentication
+
+Production deployment requires `AUTH_USERNAME`, an scrypt password hash, and a random
+`AUTH_SESSION_SECRET`. `scripts/create_auth_hash.py` generates the values without storing
+the clear-text password. Successful login receives an HttpOnly, Secure, SameSite=Strict,
+short-lived signed cookie. State-changing browser requests require the non-HttpOnly
+double-submit CSRF cookie/header pair; WebSockets require the same cookie and an origin
+matching the request host. Failed logins are throttled per source IP.
+
+`scripts/pi_deploy.sh` refuses to deploy when authentication is missing or disabled.
 
 ---
 
@@ -176,8 +185,8 @@ credentials.
 
 Pi-hole binds to port 53 (DNS) with `cap_add: - NET_ADMIN`. This capability allows it to
 manage network interfaces for DNS, but it's scoped only to the Pi-hole container — the
-app container has no extra capabilities.
+app container has no extra capabilities. The admin port is bound to `127.0.0.1:8080` and
+is reachable through an SSH tunnel, not through the VPN web service.
 
-Pi-hole's admin web UI is exposed on `8080:80` — intentionally not proxied through Nginx
-and not TLS-protected, because it's only accessible on the LAN (firewall blocks it from
-the internet).
+The host firewall and `DOCKER-USER` chain restrict DNS to `10.8.0.0/24`; it is not a
+LAN-wide DNS service in the VPN-only profile.

@@ -10,8 +10,9 @@ from src.agent.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Central bank deposit/policy rates — approximate, updated periodically.
-# Verify with official sources before trading.
+# Central bank deposit/policy rates — static reference values only.  These are
+# intentionally never treated as live trading data; current decisions must be
+# corroborated with the central bank's official publication or market feed.
 _CENTRAL_BANK_RATES: dict[str, dict] = {
     "USD": {"bank": "Federal Reserve", "rate_pct": 4.25, "currency": "US Dollar"},
     "EUR": {"bank": "ECB", "rate_pct": 3.25, "currency": "Euro"},
@@ -178,8 +179,11 @@ def get_central_bank_rates(currencies: list[str] | None = None) -> dict:
         "top_carry_trades": differentials[:10],
         "unknown_currencies": unknown,
         "data_note": (
-            "Rates are approximate and updated periodically. "
-            "Always verify with the central bank's official website before trading."
+            "Static reference rates are included for educational carry arithmetic only. "
+            "They may be stale and must not be used as a trade trigger. Verify each rate "
+            "with the central bank's official publication before trading."
         ),
-        "as_of": "2025-08",
+        "data_quality": "static_reference_only",
+        "usable_for_auto_trading": False,
+        "as_of": "not-live",
     }

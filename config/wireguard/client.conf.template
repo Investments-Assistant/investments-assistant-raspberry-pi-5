@@ -29,7 +29,8 @@ Endpoint = <YOUR_PUBLIC_IP_OR_DDNS>:51820
 # Split tunnel: only route Pi/VPN traffic through WireGuard.
 # This lets your phone use its normal internet connection for everything else
 # while still reaching the investment assistant at 10.8.0.1.
-# Change to 0.0.0.0/0,::/0 if you want ALL traffic routed through the Pi.
+# Do not broaden this to 0.0.0.0/0: the deployment intentionally does not
+# provide internet forwarding through the Pi.
 AllowedIPs = 10.8.0.0/24
 
 # Keep alive through NAT routers (25s is the recommended value)

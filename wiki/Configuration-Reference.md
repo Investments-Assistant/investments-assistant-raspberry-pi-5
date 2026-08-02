@@ -31,6 +31,13 @@ In `development` mode:
 | Variable | Type | Default | Description |
 | --- | --- | --- | --- |
 | `ALLOWED_IPS` | comma-separated CIDRs | `10.8.0.0/24` | IP ranges allowed to access the app |
+| `TRUST_PROXY_HEADERS` | bool | `true` | Trust the configured reverse proxy client-IP headers |
+| `AUTH_USERNAME` | string | `admin` | Local operator ID |
+| `AUTH_PASSWORD_HASH` | string | `""` | scrypt hash from `scripts/create_auth_hash.py` |
+| `AUTH_SESSION_SECRET` | string | `""` | Random signing secret for browser sessions |
+| `AUTH_SESSION_TTL_MINUTES` | integer | `480` | Signed session lifetime |
+| `AUTH_REQUIRE_LOGIN` | bool | `true` | Must remain true on a production/Pi deploy |
+| `AUTH_COOKIE_SECURE` | bool | `true` | Mark browser cookies Secure in production |
 
 Examples:
 
@@ -38,11 +45,8 @@ Examples:
 # VPN only (maximum security):
 ALLOWED_IPS=10.8.0.0/24
 
-# VPN + home LAN:
-ALLOWED_IPS=10.8.0.0/24,192.168.1.0/24
-
-# VPN + LAN + a specific machine:
-ALLOWED_IPS=10.8.0.0/24,192.168.0.0/16,203.0.113.5/32
+# If you intentionally change this, also change the host firewall and Nginx rules.
+# The supported Pi profile is VPN-only.
 ```
 
 `settings.allowed_networks` parses this string into a list of `ipaddress.IPv4Network`
@@ -91,6 +95,10 @@ if the agent feels too repetitive.
 | `AUTO_MAX_TRADE_USD` | float | `500.0` | Maximum USD per single trade in auto mode |
 | `AUTO_DAILY_LOSS_LIMIT_USD` | float | `1000.0` | Maximum realized loss in a single day before auto-trading is halted |
 | `AUTO_ALLOWED_SYMBOLS` | comma-separated | `""` (all) | Symbols the agent can trade autonomously |
+| `AUTO_ALLOW_MARKET_ORDERS` | bool | `false` | Whether auto mode may submit orders without a limit/notional |
+| `LIVE_TRADING_ENABLED` | bool | `false` | Explicit gate for live-money routes |
+| `AUTONOMOUS_SCANS_ENABLED` | bool | `true` | Enable hourly local evidence reviews |
+| `AUTONOMOUS_SCAN_INTERVAL_MINUTES` | integer | `60` | Autonomous review interval |
 
 Examples:
 
@@ -102,10 +110,9 @@ AUTO_ALLOWED_SYMBOLS=AAPL,MSFT,NVDA,SPY,QQQ,BTCUSDT,ETHUSDT
 AUTO_ALLOWED_SYMBOLS=
 ```
 
-**`AUTO_DAILY_LOSS_LIMIT_USD` is actively enforced**: when the daily realized loss
-exceeds this threshold, `_check_and_enforce_daily_limit()` sets `DailyPnL.auto_trading_halted = True`
-and every subsequent `execute_trade` in auto mode is blocked for the rest of the day. The
-flag clears automatically the next calendar day (a new `daily_pnl` row is created).
+**`AUTO_DAILY_LOSS_LIMIT_USD` is fail-closed**: a recorded halt blocks subsequent auto trades,
+and a database outage also blocks them. The limit is updated only from an explicit realized-P&L
+value returned by a broker adapter; order submission alone is not treated as a fill or as P&L.
 
 **Start with `TRADING_MODE=recommend`** until you've verified the agent's behaviour
 through several conversations. Switch to `auto` only after you're confident in the
@@ -180,8 +187,10 @@ simulated money. Switch to `false` only after extensive testing.
 | --- | --- | --- | --- |
 | `NEWSAPI_KEY` | string | `""` | NewsAPI key from <https://newsapi.org> |
 | `GUARDIAN_API_KEY` | string | `""` | Guardian Content API key — free at <https://open-platform.theguardian.com> |
+| `NEWS_API_ADAPTERS_ENABLED` | bool | `false` | Opt in to NewsAPI/Guardian; RSS/HTML are the default |
 
-Both are optional — the app works without them (falls back to RSS-only).
+Both keys are optional and ignored unless the adapter flag is enabled. The default profile
+uses RSS and polite HTML scraping without news APIs.
 
 ---
 
@@ -202,6 +211,7 @@ Both are optional — the app works without them (falls back to RSS-only).
 | Variable | Type | Default | Description |
 | --- | --- | --- | --- |
 | `MARKET_DATA_REFRESH_MINUTES` | integer | `5` | How often to refresh the market snapshot |
+| `NEWS_INGESTION_MINUTES` | integer | `60` | How often to ingest RSS/HTML news |
 | `WEEKLY_REPORT_DAY` | integer | `6` | Weekday for weekly report: 0=Monday, 6=Sunday |
 | `WEEKLY_REPORT_HOUR` | integer | `18` | UTC hour |
 | `WEEKLY_REPORT_MINUTE` | integer | `0` | UTC minute |

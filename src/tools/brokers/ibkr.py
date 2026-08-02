@@ -125,14 +125,38 @@ def submit_ibkr_order(
     quantity: float,
     order_type: str = "market",
     limit_price: float | None = None,
+    stop_price: float | None = None,
+    asset_type: str | None = None,
+    option_expiry: str | None = None,
+    option_strike: float | None = None,
+    option_right: str | None = None,
 ) -> dict:
     if not settings.ibkr_enabled:
         return _disabled()
     try:
-        from ib_insync import Forex, LimitOrder, MarketOrder, Stock
+        from ib_insync import Forex, LimitOrder, MarketOrder, Option, Stock, StopLimitOrder
 
         ib = _get_ib()
-        if _is_forex_pair(symbol):
+        normalized_asset_type = (asset_type or "").lower().strip()
+        if normalized_asset_type == "option":
+            if not option_expiry or option_strike is None or option_right not in {"C", "P"}:
+                return {
+                    "success": False,
+                    "error": "Option orders require expiry, strike, and right (C or P).",
+                }
+            expiry = option_expiry.replace("-", "")
+            contract = Option(
+                symbol,
+                expiry,
+                float(option_strike),
+                option_right,
+                "SMART",
+                multiplier="100",
+                currency="USD",
+            )
+        elif normalized_asset_type == "forex" or (
+            not normalized_asset_type and _is_forex_pair(symbol)
+        ):
             clean = symbol.upper().replace("/", "").replace("-", "")
             contract = Forex(clean)
         else:
@@ -146,6 +170,10 @@ def submit_ibkr_order(
             if limit_price is None:
                 return {"error": "limit_price required"}
             order = LimitOrder(action, quantity, limit_price)
+        elif order_type == "stop_limit":
+            if limit_price is None or stop_price is None:
+                return {"error": "limit_price and stop_price required"}
+            order = StopLimitOrder(action, quantity, limit_price, stop_price)
         else:
             return {"error": f"Unsupported order type: {order_type}"}
 
@@ -156,6 +184,7 @@ def submit_ibkr_order(
             "success": True,
             "order_id": trade.order.orderId,
             "symbol": symbol,
+            "asset_type": normalized_asset_type or ("forex" if _is_forex_pair(symbol) else "stock"),
             "status": trade.orderStatus.status,
         }
     except Exception as exc:

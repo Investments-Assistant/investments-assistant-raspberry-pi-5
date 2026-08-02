@@ -22,10 +22,74 @@ logger = get_logger(__name__)
 
 def _download(symbols: list[str], start: str, end: str) -> pd.DataFrame:
     """Download adjusted close prices for symbols."""
+    if not symbols:
+        return pd.DataFrame()
     data = yf.download(symbols, start=start, end=end, auto_adjust=True, progress=False)
     if isinstance(data.columns, pd.MultiIndex):
         return data["Close"].dropna(how="all")
     return data[["Close"]].rename(columns={"Close": symbols[0]}).dropna()
+
+
+def _momentum(
+    prices: pd.DataFrame,
+    capital: float,
+    lookback_days: int = 60,
+    top_n: int = 3,
+) -> tuple[pd.Series, list[dict]]:
+    """Monthly top-momentum rotation using only prices known at rebalance time."""
+    if lookback_days < 2 or top_n < 1:
+        raise ValueError("lookback_days must be >= 2 and top_n must be >= 1")
+    equity = pd.Series(float(capital), index=prices.index)
+    holdings: dict[str, float] = {}
+    previous_month = None
+    trades: list[dict] = []
+
+    for i, date in enumerate(prices.index):
+        available = prices.loc[date].dropna()
+        if i >= lookback_days and not available.empty:
+            month = date.to_period("M")
+            if month != previous_month:
+                previous_value = float(equity.iloc[i - 1]) if i else capital
+                lookback = prices.iloc[i - lookback_days]
+                returns = (available / lookback.reindex(available.index) - 1).dropna()
+                selected = returns.nlargest(top_n)
+                # Do not force a purchase into a negative-trend asset.
+                selected = selected[selected > 0]
+                for symbol, shares in holdings.items():
+                    if symbol in available:
+                        trades.append(
+                            {
+                                "date": str(date.date()),
+                                "action": "SELL",
+                                "symbol": symbol,
+                                "shares": round(shares, 6),
+                                "reason": "monthly momentum rebalance",
+                            }
+                        )
+                holdings = {}
+                if not selected.empty:
+                    allocation = previous_value / len(selected)
+                    for symbol in selected.index:
+                        shares = allocation / float(available[symbol])
+                        holdings[symbol] = shares
+                        trades.append(
+                            {
+                                "date": str(date.date()),
+                                "action": "BUY",
+                                "symbol": symbol,
+                                "shares": round(shares, 6),
+                                "momentum_pct": round(float(selected[symbol] * 100), 2),
+                            }
+                        )
+                previous_month = month
+
+        value = sum(
+            shares * float(available[symbol])
+            for symbol, shares in holdings.items()
+            if symbol in available
+        )
+        equity.iloc[i] = value if holdings else (float(equity.iloc[i - 1]) if i else capital)
+    return equity, trades
 
 
 def _metrics(equity: pd.Series) -> dict:
@@ -194,6 +258,10 @@ def run_simulation(
 ) -> dict:
     """Run a backtested simulation. Returns equity curve, metrics, and trades."""
     end = period_end or datetime.now(UTC).strftime("%Y-%m-%d")
+    if not symbols:
+        return {"error": "At least one symbol is required."}
+    if initial_capital <= 0 or not math.isfinite(initial_capital):
+        return {"error": "initial_capital must be a positive finite number."}
     try:
         prices = _download(symbols, period_start, end)
     except Exception as exc:
@@ -201,6 +269,10 @@ def run_simulation(
 
     if prices.empty:
         return {"error": "No price data returned for the given symbols and period."}
+    prices = prices.copy()
+    prices = prices.dropna(axis=1, how="all").ffill().dropna(how="all")
+    if prices.empty or prices.shape[1] == 0:
+        return {"error": "No usable price series returned for the requested symbols."}
 
     stype = strategy.get("type", "buy_and_hold")
     params = strategy.get("params", {})
@@ -222,10 +294,19 @@ def run_simulation(
                 rsi_buy=float(params.get("rsi_buy", 30)),
                 rsi_sell=float(params.get("rsi_sell", 70)),
             )
+        elif stype == "momentum":
+            equity, trades = _momentum(
+                prices,
+                initial_capital,
+                lookback_days=int(params.get("lookback_days", 60)),
+                top_n=int(params.get("top_n", min(3, len(prices.columns)))),
+            )
         else:
             return {
-                "error": f"Unknown strategy type: {stype}. Use buy_and_hold, sma_crossover, \
-                    or rsi_mean_reversion."
+                "error": (
+                    f"Unknown strategy type: {stype}. Use buy_and_hold, sma_crossover, "
+                    "rsi_mean_reversion, or momentum."
+                )
             }
     except Exception as exc:
         logger.exception("Simulation failed")

@@ -16,9 +16,9 @@ The news system has two separate pipelines:
 The live tool is fast and always returns fresh results, but:
 - It has no memory — the agent can't ask "what was the news about X last month?"
 - RSS feeds return only the most recent 10–20 articles per feed
-- NewsAPI has a rate limit and 7-day lookback on the free tier
+- Optional API adapters have rate limits and external-account considerations
 
-The persistent memory pipeline runs on a schedule (every 30 minutes), accumulates a growing
+The persistent memory pipeline runs on a schedule (hourly by default), accumulates a growing
 corpus, and enables ranked full-text search over it. Together the two pipelines cover both
 "what's happening right now" and "what happened historically".
 
@@ -26,8 +26,8 @@ corpus, and enables ranked full-text search over it. Together the two pipelines 
 
 ## Source catalogue (`src/news/sources.py`)
 
-The persistent pipeline pulls from 21 RSS feeds, The Guardian Content API, and optional
-web scraping targets. The RSS catalogue was curated to cover:
+The persistent pipeline pulls from 21 RSS feeds and optional web scraping targets. The RSS
+catalogue was curated to cover:
 
 ### Global financial media
 | Source | Why included |
@@ -66,10 +66,11 @@ Portuguese/European economic developments alongside global markets.
 
 ---
 
-## The Guardian API adapter
+## Optional Guardian API adapter
 
-The Guardian offers a **free tier** (500 requests/day, no credit card required) with full
-article body text via their Content API (https://open-platform.theguardian.com/).
+The Guardian adapter is disabled by default. If `NEWS_API_ADAPTERS_ENABLED=true` and
+`GUARDIAN_API_KEY` is set, it can provide full article body text via their Content API
+(https://open-platform.theguardian.com/). This is outside the strict RSS/HTML-only profile.
 
 Unlike RSS which gives only headlines and short summaries, the Guardian API returns the
 full `bodyText` field — up to 5,000 characters stored in the `content` column of
@@ -80,8 +81,8 @@ The pipeline fetches from five Guardian sections: `business`, `money`, `technolo
 `world`, `environment` — each up to 50 articles per run, looking back `days_back` days
 (default: 1 day for scheduled runs).
 
-**Configuration**: set `GUARDIAN_API_KEY` in `.env`. If the key is absent, the Guardian
-adapter silently returns an empty list.
+**Configuration**: set both `NEWS_API_ADAPTERS_ENABLED=true` and `GUARDIAN_API_KEY` in
+`.env`. If either is absent, the Guardian adapter returns an empty list.
 
 ---
 
@@ -96,7 +97,7 @@ Two open-access targets are scraped with `httpx` + `BeautifulSoup`:
 
 These sites have no RSS feed and no public API, so scraping is the only option. The
 scraper uses a polite `User-Agent` string (`InvestmentAssistantBot/1.0`) and fetches at
-most 10 items per site per 30-minute run.
+most 10 items per site per scheduled run.
 
 **Note**: Financial Times and Bloomberg are paywalled. Their RSS feeds give only
 headlines; scraping would violate their Terms of Service, so only RSS is used.
@@ -131,7 +132,7 @@ fires a few hours late.
 
 ## Deduplication
 
-All three source types (RSS, Guardian, scraper, email) write through `ingest_articles()`
+All source types (RSS, optional API, scraper, email) write through `ingest_articles()`
 which uses PostgreSQL's **ON CONFLICT DO NOTHING** on the `url` unique constraint:
 
 ```python

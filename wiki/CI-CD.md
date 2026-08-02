@@ -53,7 +53,8 @@ Deployment steps:
 2. Sync source into `PI_DEPLOY_DIR` or `$HOME/investments-assistant`.
 3. Preserve `.env`, `models/`, generated reports, and Nginx certificates.
 4. Run `bash scripts/pi_deploy.sh`.
-5. Smoke-test `GET /api/health` from inside the app container.
+5. Smoke-test `GET /api/ready` from inside the app container so the database and
+   local model file are both verified before the deployment is reported healthy.
 
 ---
 

@@ -1,7 +1,8 @@
 # Investment Assistant — Wiki
 
 A private, home-hosted investment assistant that runs entirely on a **Raspberry Pi 5 (8 GB)**.
-No cloud AI, no subscription fees, no data leaving your network.
+No cloud AI or remote reasoning. Outbound traffic is limited to configured market/news
+sources and any explicitly enabled broker connectivity.
 
 ---
 
@@ -12,12 +13,12 @@ No cloud AI, no subscription fees, no data leaving your network.
 | [Architecture](Architecture) | Full system diagram, design rationale, and request-flow walkthrough |
 | [LLM Backend](LLM-Backends) | llama.cpp, GGUF format, model selection for Pi 5 |
 | [Agent and Tool Use](Agent-and-Tool-Use) | ReAct loop, orchestrator, conversation history, system prompt |
-| [Tools Reference](Tools-Reference) | All 18 tools — inputs, outputs, implementation notes |
+| [Tools Reference](Tools-Reference) | All 23 tools — inputs, outputs, implementation notes |
 | [Broker Integrations](Broker-Integrations) | Alpaca, Interactive Brokers, Coinbase, Binance — why each, how each works |
-| [News Pipeline](News-Pipeline) | RSS, Guardian API, web scraping, email ingestion, PostgreSQL FTS |
+| [News Pipeline](News-Pipeline) | RSS, optional API adapters, web scraping, email ingestion, PostgreSQL FTS |
 | [Database Schema](Database-Schema) | All ORM models, column types, indexes, design decisions |
 | [Scheduler and Jobs](Scheduler-and-Jobs) | APScheduler, every job, timing, the autonomous scan |
-| [Security Model](Security-Model) | Four-layer defence, WireGuard, iptables, Nginx, FastAPI |
+| [Security Model](Security-Model) | WireGuard-only access, iptables, Nginx, FastAPI, ID/password auth |
 | [Configuration Reference](Configuration-Reference) | Every `.env` variable explained |
 | [CI/CD](CI-CD) | GitHub Actions workflows, SonarCloud quality gate |
 | [MCP Integration](MCP-Integration) | Using the assistant from Claude Desktop / Claude Code |

@@ -1,6 +1,6 @@
 # Tools Reference
 
-All 19 agent tools, grouped by category. Tool names are the exact strings the LLM uses.
+All 23 agent tools, grouped by category. Tool names are the exact strings the LLM uses.
 
 ---
 
@@ -34,6 +34,12 @@ Identical to `get_stock_data` but semantically scoped to crypto tickers.
 
 **Note**: Yahoo Finance's crypto data has occasional gaps and stale prices outside US
 trading hours. For high-frequency crypto trading, consider a direct exchange API.
+
+### `assess_nft_risk`
+Evidence-only NFT collection risk screen. It accepts caller-supplied floor, volume, sales,
+holder concentration, holder count, and spread metrics and returns liquidity/concentration
+warnings. It performs no marketplace request, authenticity check, valuation, or NFT order.
+The result is always marked `usable_for_auto_trading=false`.
 
 ---
 
@@ -122,7 +128,8 @@ Resolve a company name or keyword to ticker symbols.
 ### `search_market_news`
 Fetch recent articles and compute sentiment.
 
-**Sources**: NewsAPI (if `NEWSAPI_KEY` is set) → RSS feeds fallback
+**Sources**: RSS feeds by default; NewsAPI is used only when
+`NEWS_API_ADAPTERS_ENABLED=true` and `NEWSAPI_KEY` is set.
 
 **Parameters**
 | Name | Type | Default | Description |
@@ -143,9 +150,9 @@ would use extra RAM and add significant latency. The keyword approach is fast (m
 and good enough for "is this article broadly positive or negative about the market?" The
 LLM itself provides nuanced sentiment analysis in its response.
 
-**Fallback chain**: if NewsAPI returns no results (no key, rate limit, query too narrow),
-the function falls back to parsing RSS feeds from Reuters, CNBC, MarketWatch, Seeking
-Alpha, Yahoo Finance, Coindesk, and CryptoNews.
+**Default path**: the function parses RSS feeds from Reuters, CNBC, MarketWatch, Seeking
+Alpha, Yahoo Finance, Coindesk, and CryptoNews. Optional API adapters are disabled in the
+strict local/no-news-API profile.
 
 ---
 

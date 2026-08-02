@@ -28,6 +28,39 @@ body {
   overflow: hidden;
 }
 
+/* ── Authentication page ───────────────────────────────────────────────────── */
+.auth-page {
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at top, #16213e 0%, var(--bg-deep) 55%);
+}
+.auth-card {
+  width: min(92vw, 390px);
+  padding: 32px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 18px 55px rgba(0, 0, 0, 0.35);
+}
+.auth-brand { color: var(--accent-lit); font-weight: 700; margin-bottom: 22px; }
+.auth-card h1 { font-size: 1.55rem; margin-bottom: 6px; }
+.auth-subtitle, .auth-note { color: var(--text-muted); font-size: 0.82rem; }
+.auth-card form { display: flex; flex-direction: column; gap: 8px; margin-top: 24px; }
+.auth-card label { font-size: 0.8rem; color: var(--text-muted); margin-top: 6px; }
+.auth-card input {
+  width: 100%; padding: 11px 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--bg-input); color: var(--text-main);
+  font: inherit;
+}
+.auth-card input:focus { outline: none; border-color: var(--accent); }
+.auth-card button {
+  margin-top: 12px; padding: 11px; border: 0; border-radius: 8px;
+  background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer;
+}
+.auth-card button:hover { background: var(--accent-lit); }
+.auth-error { color: var(--red); font-size: 0.8rem; margin-top: 8px; }
+.auth-note { margin-top: 22px; text-align: center; }
+
 /* ── Sidebar ────────────────────────────────────────────────────────────────── */
 #sidebar {
   width: var(--sidebar-w);
@@ -69,6 +102,13 @@ body {
 }
 .mode-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 .mode-status { font-size: 0.75rem; color: var(--text-muted); line-height: 1.4; }
+.kill-switch {
+  width: 100%; margin-top: 0.65rem; padding: 6px 8px;
+  border: 1px solid #ef4444; border-radius: 6px;
+  color: #fecaca; background: rgba(127, 29, 29, 0.45);
+  cursor: pointer; font-size: 0.75rem;
+}
+.kill-switch:hover { background: rgba(153, 27, 27, 0.75); }
 
 /* Market snapshot */
 .market-snapshot {

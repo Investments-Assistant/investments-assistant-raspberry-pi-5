@@ -49,7 +49,8 @@ sudo apt-get install -y -q \
   python3 \
   python3-pip \
   python3-venv \
-  rsync
+  rsync \
+  ufw
 
 # ── 2. Install Docker ─────────────────────────────────────────────────────────
 echo "[2/9] Installing Docker…"
@@ -65,10 +66,8 @@ fi
 echo "[3/9] Installing WireGuard…"
 sudo apt-get install -y -q wireguard wireguard-tools qrencode
 
-# Enable IP forwarding (required for WireGuard to route client traffic)
-grep -q "^net.ipv4.ip_forward=1" /etc/sysctl.conf \
-  || echo "net.ipv4.ip_forward=1" | sudo tee -a /etc/sysctl.conf
-sudo sysctl -p -q
+# This deployment is a host-only VPN: clients reach the Pi's 10.8.0.1
+# services, but the Pi is not configured as an internet gateway.
 
 # ── 4. Configure WireGuard ────────────────────────────────────────────────────
 echo "[4/9] Setting up WireGuard keys…"
@@ -105,7 +104,7 @@ if [[ ! -f .env ]]; then
   echo ""
   echo "┌──────────────────────────────────────────────────────┐"
   echo "  .env created — fill in required fields:"
-  echo "  POSTGRES_PASSWORD, PIHOLE_PASSWORD,"
+  echo "  POSTGRES_PASSWORD, PIHOLE_PASSWORD, and browser auth values"
   echo "  LLM_MODEL_PATH (after downloading a model),"
   echo "  brokerage API keys (ALPACA, COINBASE, BINANCE, ...)"
   echo "└──────────────────────────────────────────────────────┘"
@@ -158,24 +157,29 @@ fi
 # ── 9. Firewall ────────────────────────────────────────────────────────────────
 echo "[9/9] Configuring firewall…"
 
+# This profile is a VPN endpoint, not a router.  Explicitly turn forwarding off
+# so a previous Pi networking setup cannot silently make the host a transit
+# gateway for a WireGuard peer.
+echo "net.ipv4.ip_forward=0" | sudo tee /etc/sysctl.d/99-investment-assistant-host-only.conf >/dev/null
+echo "net.ipv6.conf.all.forwarding=0" | sudo tee -a /etc/sysctl.d/99-investment-assistant-host-only.conf >/dev/null
+sudo sysctl --system >/dev/null
+
 # ── UFW (host-level firewall) ─────────────────────────────────────────────────
 # IMPORTANT: Ports 80 and 443 are intentionally NOT opened here.
 # The investment assistant is only accessible through the WireGuard VPN (10.8.0.0/24).
 # Do NOT forward ports 80/443 on your router — only forward UDP 51820.
 sudo ufw default deny incoming
 sudo ufw default allow outgoing
-sudo ufw allow ssh                            # SSH (change port here if not 22)
 sudo ufw allow 51820/udp                      # WireGuard — THE ONLY INTERNET-FACING PORT
-sudo ufw allow from 192.168.0.0/16 to any port 53   # Pi-hole DNS (LAN)
+sudo ufw allow from 10.8.0.0/24 to any port 22 # SSH administration via VPN only
 sudo ufw allow from 10.8.0.0/24   to any port 53    # Pi-hole DNS (VPN clients)
-sudo ufw allow from 192.168.0.0/16 to any port 8080 # Pi-hole admin UI (LAN only)
 
 # ── DOCKER-USER iptables chain ────────────────────────────────────────────────
 # Docker bypasses UFW by writing its own iptables rules.
 # The DOCKER-USER chain is evaluated BEFORE Docker's own rules and is never
 # overwritten by Docker.  Rules here survive `docker compose restart`.
 #
-# Strategy: only allow 80/443 from the WireGuard VPN subnet and the LAN.
+# Strategy: only allow web and Pi-hole DNS traffic from the WireGuard VPN subnet.
 # Everything else (i.e. the internet) is dropped, even if Docker binds to 0.0.0.0.
 
 # Flush any existing DOCKER-USER rules first
@@ -184,12 +188,12 @@ sudo iptables -F DOCKER-USER 2>/dev/null || true
 # Allow VPN clients (10.8.0.0/24) to reach web ports
 sudo iptables -I DOCKER-USER 1 -p tcp -m multiport --dports 80,443 \
     -s 10.8.0.0/24 -j ACCEPT
-# Allow LAN clients (192.168.x.x) to reach web ports
-# Remove the next line if you want the app accessible ONLY through the VPN.
-sudo iptables -I DOCKER-USER 2 -p tcp -m multiport --dports 80,443 \
-    -s 192.168.0.0/16 -j ACCEPT
+sudo iptables -I DOCKER-USER 2 -p udp --dport 53 -s 10.8.0.0/24 -j ACCEPT
+sudo iptables -I DOCKER-USER 3 -p tcp --dport 53 -s 10.8.0.0/24 -j ACCEPT
 # DROP everything else (internet) — this is the line that matters
 sudo iptables -A DOCKER-USER -p tcp -m multiport --dports 80,443 -j DROP
+sudo iptables -A DOCKER-USER -p udp --dport 53 -j DROP
+sudo iptables -A DOCKER-USER -p tcp --dport 53 -j DROP
 
 # Persist iptables rules across reboots
 sudo netfilter-persistent save
@@ -202,6 +206,7 @@ echo "Firewall configured."
 # ── SSH hardening reminder ────────────────────────────────────────────────────
 echo ""
 echo "┌──────────────────────────────────────────────────────┐"
+echo "│  SSH is reachable through the VPN only.              │"
 echo "│  Recommended: disable SSH password authentication    │"
 echo "│  (use key-based auth only):                          │"
 echo "│                                                      │"
@@ -223,8 +228,8 @@ echo "║  Setup complete!                                             ║"
 echo "╠══════════════════════════════════════════════════════════════╣"
 echo "║                                                              ║"
 echo "║  Access via WireGuard VPN:  https://10.8.0.1                ║"
-echo "║  Access via LAN:            https://$PI_IP                  ║"
-echo "║  Pi-hole Admin:             http://$PI_IP:8080  (LAN only)  ║"
+echo "║  Access:                    https://10.8.0.1 (VPN only)   ║"
+echo "║  Pi-hole Admin:             SSH tunnel to localhost:8080  ║"
 echo "║                                                              ║"
 echo "║  Next steps:                                                 ║"
 echo "║  1. Download a model: python3 scripts/download_model.py      ║"
@@ -232,7 +237,7 @@ echo "║  2. Edit .env (POSTGRES_PASSWORD, LLM_MODEL_PATH, etc.)     ║"
 echo "║  3. Deploy: bash scripts/pi_deploy.sh                       ║"
 echo "║  4. Follow config/wireguard/setup.md — set up VPN clients   ║"
 echo "║  5. On your router: ONLY forward UDP 51820 to $PI_IP        ║"
-echo "║  6. Point router DHCP DNS → $PI_IP (Pi-hole)                ║"
+echo "║  6. (Optional) set VPN clients' DNS to 10.8.0.1             ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 

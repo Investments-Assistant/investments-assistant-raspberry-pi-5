@@ -6,6 +6,7 @@ from the configured LLM client through to the caller (WebSocket handler).
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -13,6 +14,7 @@ from src.agent.clients import BaseLLMClient, create_llm_client
 from src.agent.prompts import SYSTEM_PROMPT
 from src.agent.utils.logger import get_logger
 from src.config import settings
+from src.tools.dispatcher import tool_context
 
 logger = get_logger(__name__)
 
@@ -24,6 +26,10 @@ class InvestmentsAssistantOrchestrator:
         self.session_id = session_id
         self.history: list[dict[str, Any]] = []
         self._client: BaseLLMClient = create_llm_client()
+        # llama.cpp shares one in-process model across sessions.  Serialising
+        # turns prevents concurrent calls from corrupting the model context and
+        # keeps the Pi's small RAM budget predictable.
+        self._turn_lock = asyncio.Lock()
 
     def _build_system(self) -> str:
         return SYSTEM_PROMPT.format(
@@ -49,23 +55,25 @@ class InvestmentsAssistantOrchestrator:
           {"type": "tool_result", "name": "...", "result": "..."}
           {"type": "done"}
         """
-        self.history.append({"role": "user", "content": user_message})
+        async with self._turn_lock:
+            self.history.append({"role": "user", "content": user_message})
 
-        full_response_text = ""
-        async for event in self._client.stream_response(
-            messages=self._trimmed_history(),
-            system=self._build_system(),
-        ):
-            if event["type"] == "text_delta":
-                full_response_text += event["text"]
-            yield event
+            full_response_text = ""
+            with tool_context(self.session_id):
+                async for event in self._client.stream_response(
+                    messages=self._trimmed_history(),
+                    system=self._build_system(),
+                ):
+                    if event["type"] == "text_delta":
+                        full_response_text += event["text"]
+                    yield event
 
-        # Append assistant response to history
-        if full_response_text:
-            self.history.append({"role": "assistant", "content": full_response_text})
+            # Append assistant response to history
+            if full_response_text:
+                self.history.append({"role": "assistant", "content": full_response_text})
 
-        # Persist messages to DB (best-effort)
-        await self._persist_messages(user_message, full_response_text)
+            # Persist messages to DB (best-effort)
+            await self._persist_messages(user_message, full_response_text)
 
     async def _persist_messages(self, user_msg: str, assistant_msg: str) -> None:
         try:
@@ -104,13 +112,13 @@ class InvestmentsAssistantOrchestrator:
                 result = await session.execute(
                     select(ChatMessage)
                     .where(ChatMessage.session_id == self.session_id)
-                    .order_by(ChatMessage.created_at)
+                    .order_by(ChatMessage.created_at.desc())
                     .limit(settings.agent_max_context_messages)
                 )
                 messages = result.scalars().all()
                 self.history = [
                     {"role": m.role, "content": m.content}
-                    for m in messages
+                    for m in reversed(messages)
                     if m.role in ("user", "assistant")
                 ]
         except Exception as exc:
@@ -119,9 +127,14 @@ class InvestmentsAssistantOrchestrator:
 
 # ── Global session registry ─────────────────────────────────────────────────
 _sessions: dict[str, InvestmentsAssistantOrchestrator] = {}
+_MAX_SESSIONS = 128
 
 
 def get_or_create_session(session_id: str) -> InvestmentsAssistantOrchestrator:
     if session_id not in _sessions:
+        if len(_sessions) >= _MAX_SESSIONS:
+            # Session objects are disposable; durable history is in PostgreSQL.
+            # Bound memory use if a VPN client rotates IDs repeatedly.
+            _sessions.pop(next(iter(_sessions)))
         _sessions[session_id] = InvestmentsAssistantOrchestrator(session_id)
     return _sessions[session_id]

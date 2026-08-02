@@ -20,6 +20,7 @@
         <button id="btn-auto" class="mode-btn" onclick="setMode('auto')">Auto</button>
       </div>
       <div id="mode-status" class="mode-status">Recommend mode — agent proposes, you confirm.</div>
+      <button class="kill-switch" onclick="activateKillSwitch()">Halt auto-trading today</button>
     </div>
 
     <div class="sidebar-section">
@@ -33,7 +34,7 @@
       <div class="quick-prompts">
         <button onclick="sendQuick('Give me a full market overview right now.')">Market Overview</button>
         <button onclick="sendQuick('Analyse my portfolio and suggest any rebalancing.')">Portfolio Analysis</button>
-        <button onclick="sendQuick('What are the top crypto opportunities today? Check BTC, ETH, SOL.')">Crypto Scan</button>
+        <button onclick="sendQuick('Review BTC, ETH, and SOL with current market data, recent news, and explicit risk limits. Do not trade.')">Crypto Risk Review</button>
         <button onclick="sendQuick('Run a buy-and-hold simulation on AAPL, MSFT, NVDA from 2022-01-01.')">Backtest</button>
         <button onclick="sendQuick('Generate my weekly investment report for the past 7 days.')">Weekly Report</button>
         <button onclick="sendQuick('Search for news about Federal Reserve and analyse sentiment.')">Fed News</button>

@@ -8,6 +8,14 @@ from src.config import settings
 logger = get_logger(__name__)
 
 
+def _configured() -> bool:
+    return bool(settings.coinbase_api_key and settings.coinbase_api_secret)
+
+
+def _not_configured() -> dict:
+    return {"broker": "coinbase", "error": "Coinbase credentials are not configured"}
+
+
 def _get_client():
     from coinbase.rest import RESTClient
 
@@ -18,6 +26,8 @@ def _get_client():
 
 
 def get_coinbase_account() -> dict:
+    if not _configured():
+        return _not_configured()
     try:
         client = _get_client()
         accounts = client.get_accounts()
@@ -49,6 +59,8 @@ def get_coinbase_positions() -> list[dict]:
 
 
 def get_coinbase_orders() -> list[dict]:
+    if not _configured():
+        return [_not_configured()]
     try:
         client = _get_client()
         resp = client.list_orders(order_status="FILLED")
@@ -82,6 +94,8 @@ def submit_coinbase_order(
     symbol: Coinbase product ID, e.g. 'BTC-USD'
     side: 'buy' or 'sell'
     """
+    if not _configured():
+        return _not_configured()
     try:
         import uuid
 
@@ -127,6 +141,8 @@ def submit_coinbase_order(
 
 
 def cancel_coinbase_order(order_id: str) -> dict:
+    if not _configured():
+        return _not_configured()
     try:
         client = _get_client()
         resp = client.cancel_orders(order_ids=[order_id])

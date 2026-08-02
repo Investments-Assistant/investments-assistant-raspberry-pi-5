@@ -1,8 +1,8 @@
 # Pi-hole Ad Blocker Setup
 
-Pi-hole acts as a **network-wide DNS sinkhole**: all DNS queries on your LAN go to the Pi,
-which blocks ad/tracker domains before they ever reach your devices.
-This blocks ads on your phone, TV, YouTube app, smart devices — no browser extension needed.
+Pi-hole acts as an optional DNS sinkhole for **WireGuard VPN clients**. The VPN-only
+deployment does not expose it as a LAN-wide service; DNS and the admin UI are restricted
+to the VPN/SSH tunnel.
 
 Pi-hole is already configured in `docker-compose.yml`. This guide covers
 the router-side setup needed to activate it.
@@ -29,31 +29,20 @@ PIHOLE_PASSWORD=your_strong_password
 
 ---
 
-## 2. Configure Your Router to Use Pi-hole as DNS
+## 2. Configure VPN Clients to Use Pi-hole as DNS
 
-**Option A (recommended): Set DNS on the router (DHCP server)**
-
-Log into your router admin panel (usually `192.168.1.1`):
-- Find DHCP settings → DNS Server
-- Set **Primary DNS** to your Pi's LAN IP (e.g. `192.168.1.100`)
-- Set **Secondary DNS** to `1.1.1.1` (fallback if Pi is down)
-- Save and restart the router
-
-All devices on your network will now use Pi-hole automatically.
-
-**Option B: Set DNS per device**
-
-If you can't change router DNS, manually set DNS on each device:
-- Network settings → DNS → `192.168.1.100`
+The client template already sets `DNS = 10.8.0.1`. Keep `AllowedIPs = 10.8.0.0/24`;
+the Pi is not an internet gateway.
 
 ---
 
 ## 3. Access Pi-hole Admin UI
 
-From your LAN (or via VPN):
+Create an SSH tunnel over the VPN:
 ```
-http://192.168.1.100:8080/admin
+ssh -L 8080:127.0.0.1:8080 pi@10.8.0.1
 ```
+Then open `http://127.0.0.1:8080/admin` locally.
 
 Default login: the password you set in `.env` as `PIHOLE_PASSWORD`.
 
@@ -115,5 +104,5 @@ Device → Pi-hole DNS (Pi) → blocked? → sinkhole (no connection)
                           → allowed? → upstream DNS (1.1.1.1) → Internet
 ```
 
-Your Pi handles all DNS resolution; content delivery still goes direct to CDNs.
+Your Pi handles DNS for connected VPN clients; content delivery still goes direct to CDNs.
 There is **no performance penalty** — DNS queries are tiny and ultra-fast.

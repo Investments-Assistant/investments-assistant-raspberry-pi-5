@@ -86,10 +86,14 @@ nano .env
 | `POSTGRES_PASSWORD` | `hunter2` (strong password) |
 | `PIHOLE_PASSWORD` | `hunter2` (Pi-hole admin UI) |
 | `LLM_MODEL_PATH` | `/app/models/qwen2.5-7b-instruct-q4_k_m.gguf` |
-| `ALLOWED_IPS` | `10.8.0.0/24,192.168.0.0/16` |
+| `ALLOWED_IPS` | `10.8.0.0/24` |
+| `AUTH_USERNAME` / `AUTH_PASSWORD_HASH` / `AUTH_SESSION_SECRET` | Generate with `python3 scripts/create_auth_hash.py` |
+| `TRADING_MODE` | `recommend` (safe starting mode) |
+| `LIVE_TRADING_ENABLED` | `false` |
 | `TZ` | `Europe/Lisbon` |
 
-Broker API keys (fill in only the ones you have):
+Broker API keys are optional and are required only for account/order connectivity (not AI
+APIs). Fill in only the ones you have; keep paper/testnet routes during validation:
 `ALPACA_API_KEY` / `ALPACA_SECRET_KEY`, `COINBASE_API_KEY` / `COINBASE_API_SECRET`,
 `BINANCE_API_KEY` / `BINANCE_SECRET_KEY`.
 
@@ -150,8 +154,8 @@ qrencode -t ansiutf8 < phone.conf
 
 Follow [config/pihole/setup.md](config/pihole/setup.md).
 
-Short version: log into your router's DHCP settings and set the **primary DNS**
-to the Pi's LAN IP. All devices on your network will use Pi-hole automatically.
+Short version: the WireGuard client template already sets `DNS = 10.8.0.1`. The VPN-only
+profile does not expose Pi-hole as a LAN-wide DNS service; use an SSH tunnel for its admin UI.
 
 ---
 
@@ -160,7 +164,8 @@ to the Pi's LAN IP. All devices on your network will use Pi-hole automatically.
 1. Enable WireGuard on your phone or laptop
 2. Open `https://10.8.0.1` in your browser
 3. Accept the self-signed certificate warning
-4. Start chatting
+4. Sign in with the configured ID/password
+5. Start chatting
 
 ---
 

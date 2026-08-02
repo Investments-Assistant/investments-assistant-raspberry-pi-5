@@ -117,7 +117,9 @@ _HEADING_PREFIXES = (("### ", 3), ("## ", 2), ("# ", 1))
 def _match_heading(line: str) -> str | None:
     for prefix, level in _HEADING_PREFIXES:
         if line.startswith(prefix):
-            return f"<h{level}>{line[len(prefix) :]}</h{level}>"
+            import html
+
+            return f"<h{level}>{html.escape(line[len(prefix) :])}</h{level}>"
     return None
 
 
@@ -127,6 +129,9 @@ def _process_text_line(line: str, in_ul: bool, html_lines: list[str], re_module)
         html_lines.append("</ul>")
         in_ul = False
     if line.strip():
+        import html
+
+        line = html.escape(line)
         line = re_module.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", line)
         html_lines.append(f"<p>{line}</p>")
     else:
@@ -149,7 +154,9 @@ def _markdown_to_html(text: str) -> str:
             if not in_ul:
                 html_lines.append("<ul>")
                 in_ul = True
-            html_lines.append(f"<li>{line[2:]}</li>")
+            import html
+
+            html_lines.append(f"<li>{html.escape(line[2:])}</li>")
         else:
             in_ul = _process_text_line(line, in_ul, html_lines, re)
     if in_ul:

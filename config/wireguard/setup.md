@@ -2,12 +2,12 @@
 
 WireGuard is a fast, modern VPN built into the Linux kernel.
 It gives you cryptographically authenticated access to your investment assistant
-from anywhere in the world — and routes your devices through Pi-hole for ad blocking
-even when you're away from home.
+from anywhere in the world. This profile is host-only: it routes only `10.8.0.0/24`
+to the Pi and does not turn the Pi into an internet gateway.
 
 **Security model:** WireGuard silently drops all packets from unknown peers (no
-response, nothing to scan or brute-force). Authentication is your private key —
-nobody can connect without it.
+response, nothing to scan or brute-force). The application additionally requires its
+own ID/password login.
 
 ---
 
@@ -62,23 +62,7 @@ Fill in:
 - Each `[Peer]` `PublicKey` → the public key of that device (generated in step 6)
 - Each `[Peer]` `PresharedKey` → `sudo cat /etc/wireguard/preshared.key`
 
-If your Pi uses **Wi-Fi** instead of Ethernet, change `eth0` to `wlan0` in the
-`PostUp`/`PostDown` lines.
-
----
-
-## 5. Enable IP Forwarding
-
-`setup.sh` does this automatically. To do it manually:
-
-```bash
-echo "net.ipv4.ip_forward=1" | sudo tee -a /etc/sysctl.conf
-sudo sysctl -p
-```
-
----
-
-## 6. Start WireGuard
+## 5. Start WireGuard
 
 ```bash
 sudo systemctl enable --now wg-quick@wg0
@@ -87,7 +71,7 @@ sudo wg show    # should show the interface and listen port
 
 ---
 
-## 7. Router Port Forwarding
+## 6. Router Port Forwarding
 
 On your home router, forward **UDP port 51820** → **Pi's LAN IP** (e.g. `192.168.1.100`).
 
@@ -100,7 +84,7 @@ If your ISP gives you a dynamic public IP, set up a free DDNS service
 
 ---
 
-## 8. Generate Client Key Pairs
+## 7. Generate Client Key Pairs
 
 For each device (phone, laptop, etc.), generate a key pair on the Pi or on the device:
 
@@ -118,7 +102,7 @@ sudo systemctl restart wg-quick@wg0
 
 ---
 
-## 9. Create Client Config
+## 8. Create Client Config
 
 Copy `config/wireguard/client.conf.template` for each device and fill in:
 
@@ -139,7 +123,7 @@ Scan the QR code with the WireGuard app on your phone.
 
 ---
 
-## 10. IoT Device Integration
+## 9. IoT Device Integration
 
 For devices that support WireGuard (routers, Linux SBCs):
 
@@ -153,7 +137,7 @@ For devices that don't support WireGuard natively (smart TVs, fridges, etc.):
 
 ---
 
-## 11. Verify from Your Phone
+## 10. Verify from Your Phone
 
 1. Switch to cellular (not home Wi-Fi)
 2. Enable WireGuard on your phone
@@ -161,4 +145,4 @@ For devices that don't support WireGuard natively (smart TVs, fridges, etc.):
 4. `ping 10.8.0.1` should respond
 
 Your assistant is now accessible **only through your VPN, from anywhere in the world**,
-with no publicly visible login page.
+with an application login page after the VPN connection.

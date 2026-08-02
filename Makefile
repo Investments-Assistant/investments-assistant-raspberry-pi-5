@@ -65,7 +65,7 @@ docker-build:
 
 docker-up:
 	$(DOCKER_COMPOSE) up -d
-	@echo "Services started. App available via Nginx at https://$(shell hostname -I | awk '{print $$1}')"
+	@echo "Services started. App is available only through the WireGuard VPN at https://10.8.0.1"
 
 docker-down:
 	$(DOCKER_COMPOSE) down

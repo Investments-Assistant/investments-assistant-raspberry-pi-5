@@ -95,13 +95,15 @@ This ensures startup doesn't fail if IB Gateway isn't running.
 | `get_ibkr_account()` | Net liquidation, cash, buying power, unrealised/realised P&L |
 | `get_ibkr_positions()` | All positions with security type, currency, quantity, P&L |
 | `get_ibkr_orders()` | Active and recently filled orders |
-| `submit_ibkr_order(...)` | Market and limit orders for stocks |
+| `submit_ibkr_order(...)` | Market, limit, and stop-limit orders for stocks, ETFs, forex, and options |
 | `cancel_ibkr_order(order_id)` | Cancel by order ID |
 
-**Options trading via IBKR**: the `submit_ibkr_order` implementation only supports
-`Stock` contracts. To trade options, you'd need to change `contract = Stock(...)` to
-`contract = Option(symbol, expiry, strike, "C"/"P", "SMART")` and call
-`ib.qualifyContracts(contract)`. This is a straightforward extension.
+**Options trading via IBKR**: pass `asset_type="option"`, an ISO `option_expiry`
+(`YYYY-MM-DD`), positive `option_strike`, and `option_right` (`C` or `P`). The dispatcher
+validates those fields before creating the audit intent; IBKR qualifies a standard 100-share
+SMART option contract before sending the order. Auto mode still requires the normal explicit
+notional estimate/limit and dollar cap, and live routing remains disabled unless explicitly
+enabled.
 
 ---
 
