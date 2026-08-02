@@ -14,6 +14,7 @@ from src.tools.dispatcher import (
     _set_trading_mode,
     _validate_trade_input,
     dispatch_tool,
+    tool_context,
 )
 
 # ---------------------------------------------------------------------------
@@ -59,22 +60,39 @@ class TestDispatchTool:
 
 @pytest.mark.unit
 class TestSetTradingMode:
-    def test_recommend_mode_accepted(self):
-        with patch("src.tools.dispatcher.settings"):
-            result = _set_trading_mode("recommend")
+    async def test_recommend_mode_accepted(self):
+        user = MagicMock(id="user-1", is_active=True, trading_mode="auto")
+        result_row = MagicMock()
+        result_row.scalar_one_or_none.return_value = user
+        session = AsyncMock()
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        session.execute = AsyncMock(return_value=result_row)
+        with patch("src.tools.dispatcher.async_session", return_value=session):
+            with tool_context("test", "user-1", "auto"):
+                result = await _set_trading_mode("recommend")
 
         assert result["success"] is True
         assert result["trading_mode"] == "recommend"
+        assert user.trading_mode == "recommend"
 
-    def test_auto_mode_accepted(self):
-        with patch("src.tools.dispatcher.settings"):
-            result = _set_trading_mode("auto")
+    async def test_auto_mode_accepted(self):
+        user = MagicMock(id="user-1", is_active=True, trading_mode="recommend")
+        result_row = MagicMock()
+        result_row.scalar_one_or_none.return_value = user
+        session = AsyncMock()
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        session.execute = AsyncMock(return_value=result_row)
+        with patch("src.tools.dispatcher.async_session", return_value=session):
+            with tool_context("test", "user-1", "recommend"):
+                result = await _set_trading_mode("auto")
 
         assert result["success"] is True
         assert result["trading_mode"] == "auto"
 
-    def test_invalid_mode_returns_error(self):
-        result = _set_trading_mode("yolo")
+    async def test_invalid_mode_returns_error(self):
+        result = await _set_trading_mode("yolo")
         assert "error" in result
 
 

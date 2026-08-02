@@ -4,18 +4,25 @@
 Usage:
     python3 scripts/create_auth_hash.py
 
-Copy the two printed values into ``.env``.  The password itself is never
+Copy the three printed values into ``.env``.  The password itself is never
 written to disk by this script.
 """
 
 from __future__ import annotations
 
 import getpass
+from pathlib import Path
 import re
 import secrets
 import sys
 
-from src.web.auth import hash_password
+# Make direct execution from the repository root work without requiring an
+# editable install or a manually configured PYTHONPATH.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.web.auth import hash_password  # noqa: E402
 
 
 def main() -> int:

@@ -97,6 +97,19 @@ APIs). Fill in only the ones you have; keep paper/testnet routes during validati
 `ALPACA_API_KEY` / `ALPACA_SECRET_KEY`, `COINBASE_API_KEY` / `COINBASE_API_SECRET`,
 `BINANCE_API_KEY` / `BINANCE_SECRET_KEY`.
 
+The configured `AUTH_USERNAME` is the bootstrap local account. After the containers are
+running, create another account from the repository root without enabling public sign-up:
+
+```bash
+docker compose exec app python scripts/create_user.py --username second-user --display-name "Second User"
+```
+
+Each user gets an independent profile and chat history. A browser tab has its own conversation
+ID; refreshing that tab restores its history. The model itself is shared and inference is
+serialized, so two simultaneous users remain isolated but the second model turn may wait for
+the first on a 4-core Pi. Trading mode is per user; broker credentials remain a shared
+household account configuration.
+
 ---
 
 ## Step 5 — Build and start

@@ -19,7 +19,7 @@ from sqlalchemy import select, update
 from src.agent.utils.logger import get_logger
 from src.config import settings
 from src.db.database import async_session
-from src.db.models import DailyPnL, SimulationResult, Trade
+from src.db.models import DailyPnL, SimulationResult, Trade, User
 from src.tools.brokers import (
     alpaca as alpaca_tool,
     binance as binance_tool,
@@ -45,6 +45,8 @@ from src.tools.simulator import run_simulation
 logger = get_logger(__name__)
 
 _tool_session_id: ContextVar[str | None] = ContextVar("tool_session_id", default=None)
+_tool_user_id: ContextVar[str | None] = ContextVar("tool_user_id", default=None)
+_tool_trading_mode: ContextVar[str | None] = ContextVar("tool_trading_mode", default=None)
 _pending_trade_proposals: dict[str, dict] = {}
 _PROPOSAL_TTL_SECONDS = 15 * 60
 _VALID_BROKERS = {"alpaca", "ibkr", "coinbase", "binance"}
@@ -52,13 +54,21 @@ _VALID_ORDER_TYPES = {"market", "limit", "stop_limit"}
 
 
 @contextmanager
-def tool_context(session_id: str):
-    """Attach the authenticated chat session to agent tool calls."""
-    token = _tool_session_id.set(session_id)
+def tool_context(
+    session_id: str,
+    user_id: str | None = None,
+    trading_mode: str | None = None,
+):
+    """Attach the authenticated user and chat session to agent tool calls."""
+    session_token = _tool_session_id.set(session_id)
+    user_token = _tool_user_id.set(user_id)
+    mode_token = _tool_trading_mode.set(trading_mode)
     try:
         yield
     finally:
-        _tool_session_id.reset(token)
+        _tool_user_id.reset(user_token)
+        _tool_session_id.reset(session_token)
+        _tool_trading_mode.reset(mode_token)
 
 
 async def dispatch_tool(tool_name: str, tool_input: dict) -> str:
@@ -91,7 +101,6 @@ _SYNC_DISPATCH: dict[str, object] = {
     "get_trade_history": lambda inp: get_trade_history(
         broker=inp["broker"], days=inp.get("days", 30)
     ),
-    "set_trading_mode": lambda inp: _set_trading_mode(inp["mode"]),
 }
 
 # Async tools that can't live in _SYNC_DISPATCH (they are awaited in _dispatch)
@@ -119,6 +128,8 @@ async def _dispatch(name: str, inp: dict) -> object:
         return await asyncio.to_thread(_cancel_order, inp)
     if name == "generate_report":
         return await _generate_report(inp)
+    if name == "set_trading_mode":
+        return await _set_trading_mode(inp["mode"])
     return {"error": f"Unknown tool: {name}"}
 
 
@@ -333,6 +344,7 @@ def _remember_proposal(trade: dict) -> str:
     proposal_id = secrets.token_urlsafe(18)
     _pending_trade_proposals[proposal_id] = {
         "session_id": _tool_session_id.get(),
+        "user_id": _tool_user_id.get(),
         "trade": trade,
         "expires_at": now + _PROPOSAL_TTL_SECONDS,
     }
@@ -361,6 +373,7 @@ async def _create_trade_intent(trade: dict, mode: str) -> str | None:
                     order_type=trade["order_type"],
                     status="pending",
                     mode=mode,
+                    user_id=_tool_user_id.get(),
                     reason=trade.get("reason", ""),
                 )
             )
@@ -445,7 +458,8 @@ async def _execute_trade(inp: dict) -> dict:
     if error:
         return {"blocked": True, "reason": error}
 
-    if settings.trading_mode == "recommend":
+    trading_mode = _tool_trading_mode.get() or settings.trading_mode
+    if trading_mode == "recommend":
         confirmation_id = _remember_proposal(trade)
         return {
             "status": "pending_confirmation",
@@ -489,7 +503,10 @@ async def _confirm_trade(inp: dict) -> dict:
     if not proposal or proposal["expires_at"] <= time.time():
         _pending_trade_proposals.pop(confirmation_id, None)
         return {"blocked": True, "reason": "Unknown or expired confirmation ID."}
-    if proposal["session_id"] != _tool_session_id.get():
+    if (
+        proposal["session_id"] != _tool_session_id.get()
+        or proposal["user_id"] != _tool_user_id.get()
+    ):
         return {"blocked": True, "reason": "Confirmation belongs to another chat session."}
     _pending_trade_proposals.pop(confirmation_id, None)
     result = await _execute_validated_trade(proposal["trade"], "manual")
@@ -548,10 +565,24 @@ def _cancel_order(inp: dict) -> dict:
     return {"error": f"Unknown broker: {broker}"}
 
 
-def _set_trading_mode(mode: str) -> dict:
+async def _set_trading_mode(mode: str) -> dict:
     if mode not in ("recommend", "auto"):
         return {"error": "mode must be 'recommend' or 'auto'"}
-    settings.trading_mode = mode  # type: ignore[misc]
+    user_id = _tool_user_id.get()
+    if not user_id:
+        return {"blocked": True, "reason": "A user session is required to change trading mode."}
+    try:
+        async with async_session() as session:
+            result = await session.execute(select(User).where(User.id == user_id))
+            user = result.scalar_one_or_none()
+            if user is None or not user.is_active:
+                return {"blocked": True, "reason": "Authenticated user was not found."}
+            user.trading_mode = mode
+            await session.commit()
+        _tool_trading_mode.set(mode)
+    except Exception as exc:
+        logger.error("Could not persist trading mode for user %s: %s", user_id, exc)
+        return {"blocked": True, "reason": "Trading mode could not be persisted."}
     return {
         "success": True,
         "trading_mode": mode,

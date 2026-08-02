@@ -93,13 +93,28 @@ class TestAuthenticationEndpoints:
         cfg.auth_session_ttl_minutes = 10
         cfg.auth_require_login = True
         cfg.auth_cookie_secure = False
+        cfg.authentication_ready = True
         return cfg
+
+    def _db_session(self, user):
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = user
+        session = AsyncMock()
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        session.execute = AsyncMock(return_value=result)
+        return session
 
     def test_invalid_login_is_generic(self):
         cfg = self._settings()
+        user = MagicMock()
+        user.id = "user-admin"
+        user.username = "admin"
+        user.password_hash = cfg.auth_password_hash
         with (
             patch("src.web.routes.settings", cfg),
             patch("src.web.auth.config.settings", cfg),
+            patch("src.web.routes.async_session", return_value=self._db_session(user)),
         ):
             response = _make_client().post(
                 "/api/auth/login",
@@ -110,9 +125,15 @@ class TestAuthenticationEndpoints:
 
     def test_login_issues_session_and_me_endpoint_accepts_it(self):
         cfg = self._settings()
+        user = MagicMock()
+        user.id = "user-admin"
+        user.username = "admin"
+        user.display_name = "Admin"
+        user.password_hash = cfg.auth_password_hash
         with (
             patch("src.web.routes.settings", cfg),
             patch("src.web.auth.config.settings", cfg),
+            patch("src.web.routes.async_session", return_value=self._db_session(user)),
         ):
             client = _make_client()
             response = client.post(
@@ -123,7 +144,91 @@ class TestAuthenticationEndpoints:
             assert client.get("/api/auth/me").json() == {
                 "authenticated": True,
                 "username": "admin",
+                "user_id": "user-admin",
             }
+
+    def test_profile_is_persisted_for_authenticated_user(self):
+        cfg = self._settings()
+        user = MagicMock()
+        user.id = "user-admin"
+        user.username = "admin"
+        user.display_name = "Admin"
+        user.description = ""
+        user.preferences = {}
+        user.trading_mode = "recommend"
+        user.updated_at = None
+        user.password_hash = cfg.auth_password_hash
+        session = self._db_session(user)
+        with (
+            patch("src.web.routes.settings", cfg),
+            patch("src.web.auth.config.settings", cfg),
+            patch("src.web.routes.async_session", return_value=session),
+        ):
+            client = _make_client()
+            assert client.post(
+                "/api/auth/login",
+                json={"username": "admin", "password": "a-long-and-private-password"},
+            ).status_code == 200
+            response = client.put(
+                "/api/profile",
+                headers={"X-CSRF-Token": client.cookies.get("ia_csrf")},
+                json={
+                    "display_name": "Portfolio Owner",
+                    "description": "Long-term ETF investor",
+                    "preferences": {"risk_tolerance": "moderate", "base_currency": "EUR"},
+                },
+            )
+            mode_response = client.put(
+                "/api/profile/trading-mode",
+                headers={"X-CSRF-Token": client.cookies.get("ia_csrf")},
+                json={"mode": "auto"},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["display_name"] == "Portfolio Owner"
+        assert user.preferences["base_currency"] == "EUR"
+        assert mode_response.status_code == 200
+        assert user.trading_mode == "auto"
+
+    def test_history_returns_only_chat_roles_for_authenticated_session(self):
+        cfg = self._settings()
+        user = MagicMock()
+        user.id = "user-admin"
+        user.username = "admin"
+        user.display_name = "Admin"
+        user.password_hash = cfg.auth_password_hash
+        login_result = MagicMock()
+        login_result.scalar_one_or_none.return_value = user
+        message = MagicMock()
+        message.role = "assistant"
+        message.content = "AAPL is unchanged."
+        message.created_at.isoformat.return_value = "2026-08-02T10:00:00+00:00"
+        history_result = MagicMock()
+        history_result.scalars.return_value.all.return_value = [message]
+        session = AsyncMock()
+        session.__aenter__ = AsyncMock(return_value=session)
+        session.__aexit__ = AsyncMock(return_value=False)
+        session.execute = AsyncMock(side_effect=[login_result, history_result])
+        with (
+            patch("src.web.routes.settings", cfg),
+            patch("src.web.auth.config.settings", cfg),
+            patch("src.web.routes.async_session", return_value=session),
+        ):
+            client = _make_client()
+            assert client.post(
+                "/api/auth/login",
+                json={"username": "admin", "password": "a-long-and-private-password"},
+            ).status_code == 200
+            response = client.get("/api/chat/history?session_id=tab-1")
+
+        assert response.status_code == 200
+        assert response.json() == [
+            {
+                "role": "assistant",
+                "content": "AAPL is unchanged.",
+                "created_at": "2026-08-02T10:00:00+00:00",
+            }
+        ]
 
 
 # ---------------------------------------------------------------------------

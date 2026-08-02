@@ -16,7 +16,7 @@ from sqlalchemy import select, text
 from src.agent.utils.logger import get_logger
 from src.config import settings
 from src.db.database import async_session
-from src.db.models import DailyPnL, Report, Trade
+from src.db.models import ChatMessage, DailyPnL, Report, Trade, User
 from src.scheduler.jobs import get_latest_snapshot
 from src.web.auth import (
     CSRF_COOKIE,
@@ -80,19 +80,39 @@ async def websocket_chat(websocket: WebSocket, session_id: str) -> None:
     if not websocket_origin_allowed(websocket):
         await websocket.close(code=4003, reason="Origin not allowed")
         return
-    if websocket_principal(websocket) is None:
+    principal = websocket_principal(websocket)
+    if principal is None:
         await websocket.close(code=4001, reason="Authentication required")
         return
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,36}", session_id):
         await websocket.close(code=4400, reason="Invalid session")
         return
+    if principal.user_id:
+        # Signed cookies are deliberately stateless, so check the account's
+        # active flag when a WebSocket is opened. This makes local account
+        # deactivation effective without waiting for cookie expiry.
+        try:
+            async with async_session() as db_session:
+                result = await db_session.execute(
+                    select(User).where(
+                        User.id == principal.user_id,
+                        User.is_active.is_(True),
+                    )
+                )
+                if result.scalar_one_or_none() is None:
+                    await websocket.close(code=4001, reason="Authentication required")
+                    return
+        except Exception as exc:
+            logger.error("WebSocket account lookup failed: %s", exc)
+            await websocket.close(code=1013, reason="Authentication service unavailable")
+            return
 
     await websocket.accept()
     logger.info("WebSocket connected: session=%s ip=%s", session_id, ip)
 
     from src.agent.orchestrator import get_or_create_session
 
-    session = get_or_create_session(session_id)
+    session = get_or_create_session(session_id, principal.user_id)
     await session.load_history_from_db()
 
     try:
@@ -181,7 +201,7 @@ async def login_page(request: Request) -> HTMLResponse | RedirectResponse:
 
 @router.post("/api/auth/login", dependencies=[Depends(require_allowed_ip)])
 async def login(request: Request) -> JSONResponse:
-    """Authenticate the single local operator and issue fresh cookies."""
+    """Authenticate a local user and issue a user-bound session cookie."""
     ip = _get_client_ip(request)
     if not login_allowed(ip):
         raise HTTPException(status_code=429, detail="Too many failed login attempts")
@@ -189,28 +209,43 @@ async def login(request: Request) -> JSONResponse:
         body = await request.json()
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
 
     username = str(body.get("username", ""))
     password = str(body.get("password", ""))
-    valid = (
-        len(username) <= 128
-        and len(password) <= 256
-        and bool(username)
-        and bool(password)
-        and username == settings.auth_username
-        and verify_password(password, settings.auth_password_hash)
-    )
+    user = None
+    if len(username) <= 128 and len(password) <= 256 and username and password:
+        try:
+            async with async_session() as session:
+                result = await session.execute(
+                    select(User).where(User.username == username, User.is_active.is_(True))
+                )
+                user = result.scalar_one_or_none()
+        except Exception as exc:
+            logger.error("User lookup failed during login: %s", exc)
+            raise HTTPException(
+                status_code=503, detail="Authentication service unavailable"
+            ) from exc
+
+    valid = user is not None and verify_password(password, user.password_hash)
     if not valid:
         record_login_failure(ip)
         # Do not distinguish an unknown ID from a bad password.
         raise HTTPException(status_code=401, detail="Invalid ID or password")
 
     clear_login_failures(ip)
-    response = JSONResponse({"authenticated": True, "username": username})
+    response = JSONResponse(
+        {
+            "authenticated": True,
+            "username": user.username,
+            "display_name": user.display_name,
+        }
+    )
     secure = bool(settings.auth_cookie_secure and settings.is_production)
     response.set_cookie(
         SESSION_COOKIE,
-        create_session(username),
+        create_session(user.username, user.id),
         httponly=True,
         secure=secure,
         samesite="strict",
@@ -235,7 +270,184 @@ async def login(request: Request) -> JSONResponse:
 )
 async def auth_me(request: Request) -> dict:
     principal = require_authenticated(request)
-    return {"authenticated": True, "username": principal.username}
+    return {
+        "authenticated": True,
+        "username": principal.username,
+        "user_id": principal.user_id,
+    }
+
+
+def _valid_session_id(session_id: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z0-9_-]{1,36}", session_id))
+
+
+def _profile_payload(user: User) -> dict:
+    return {
+        "user_id": user.id,
+        "username": user.username,
+        "display_name": user.display_name,
+        "description": user.description,
+        "preferences": user.preferences or {},
+        "trading_mode": getattr(user, "trading_mode", settings.trading_mode),
+        "updated_at": user.updated_at.isoformat() if user.updated_at else None,
+    }
+
+
+@router.get(
+    "/api/profile",
+    dependencies=[Depends(require_allowed_ip), Depends(require_authenticated)],
+)
+async def get_profile(request: Request) -> dict:
+    """Return the authenticated user's durable assistant preferences."""
+    principal = require_authenticated(request)
+    if not principal.user_id:
+        return {
+            "user_id": None,
+            "username": principal.username,
+            "display_name": principal.username,
+            "description": "",
+            "preferences": {},
+            "trading_mode": settings.trading_mode,
+            "updated_at": None,
+        }
+    try:
+        async with async_session() as session:
+            result = await session.execute(select(User).where(User.id == principal.user_id))
+            user = result.scalar_one_or_none()
+            if user is None or not user.is_active:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            return _profile_payload(user)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Profile service unavailable") from exc
+
+
+@router.put(
+    "/api/profile",
+    dependencies=[
+        Depends(require_allowed_ip),
+        Depends(require_authenticated),
+        Depends(require_csrf),
+    ],
+)
+async def update_profile(request: Request) -> dict:
+    """Persist bounded user description and preference data."""
+    principal = require_authenticated(request)
+    if not principal.user_id:
+        raise HTTPException(status_code=503, detail="Profile persistence is unavailable")
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    display_name = str(body.get("display_name", "")).strip()
+    description = str(body.get("description", "")).strip()
+    preferences = body.get("preferences", {})
+    if len(display_name) > 128:
+        raise HTTPException(status_code=400, detail="display_name is limited to 128 characters")
+    if len(description) > 4_000:
+        raise HTTPException(status_code=400, detail="description is limited to 4000 characters")
+    if not isinstance(preferences, dict):
+        raise HTTPException(status_code=400, detail="preferences must be a JSON object")
+    try:
+        encoded_preferences = json.dumps(preferences, ensure_ascii=False)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400, detail="preferences must be JSON serialisable"
+        ) from exc
+    if len(encoded_preferences) > 8_000 or len(preferences) > 64:
+        raise HTTPException(status_code=400, detail="preferences are too large")
+
+    try:
+        async with async_session() as session:
+            result = await session.execute(select(User).where(User.id == principal.user_id))
+            user = result.scalar_one_or_none()
+            if user is None or not user.is_active:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            user.display_name = display_name[:128]
+            user.description = description[:4_000]
+            user.preferences = preferences
+            await session.commit()
+            return _profile_payload(user)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Profile persistence failed") from exc
+
+
+@router.put(
+    "/api/profile/trading-mode",
+    dependencies=[
+        Depends(require_allowed_ip),
+        Depends(require_authenticated),
+        Depends(require_csrf),
+    ],
+)
+async def update_trading_mode(request: Request) -> dict:
+    """Persist a user's trading mode without mutating the process-global default."""
+    principal = require_authenticated(request)
+    if not principal.user_id:
+        raise HTTPException(status_code=503, detail="Trading mode persistence is unavailable")
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    mode = body.get("mode") if isinstance(body, dict) else None
+    if mode not in {"recommend", "auto"}:
+        raise HTTPException(status_code=400, detail="mode must be 'recommend' or 'auto'")
+    try:
+        async with async_session() as session:
+            result = await session.execute(select(User).where(User.id == principal.user_id))
+            user = result.scalar_one_or_none()
+            if user is None or not user.is_active:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            user.trading_mode = mode
+            await session.commit()
+            return _profile_payload(user)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Trading mode persistence failed") from exc
+
+
+@router.get(
+    "/api/chat/history",
+    dependencies=[Depends(require_allowed_ip), Depends(require_authenticated)],
+)
+async def chat_history(request: Request, session_id: str, limit: int = 200) -> list[dict]:
+    """Return only the authenticated user's messages for one conversation."""
+    principal = require_authenticated(request)
+    if not _valid_session_id(session_id):
+        raise HTTPException(status_code=400, detail="Invalid session")
+    limit = min(max(1, limit), 200)
+    user_filter = (
+        ChatMessage.user_id == principal.user_id
+        if principal.user_id
+        else ChatMessage.user_id.is_(None)
+    )
+    try:
+        async with async_session() as session:
+            result = await session.execute(
+                select(ChatMessage)
+                .where(user_filter, ChatMessage.session_id == session_id)
+                .order_by(ChatMessage.created_at.desc())
+                .limit(limit)
+            )
+            messages = list(reversed(result.scalars().all()))
+            return [
+                {
+                    "role": message.role,
+                    "content": message.content,
+                    "created_at": message.created_at.isoformat(),
+                }
+                for message in messages
+                if message.role in {"user", "assistant"}
+            ]
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Chat history unavailable") from exc
 
 
 @router.post(
@@ -269,19 +481,35 @@ async def market_snapshot() -> dict:
     "/api/safety",
     dependencies=[Depends(require_allowed_ip), Depends(require_authenticated)],
 )
-async def safety_status() -> dict:
+async def safety_status(request: Request) -> dict:
     """Expose the effective execution policy to the authenticated UI."""
     daily_halted: bool | None = None
+    principal = require_authenticated(request)
+    trading_mode = settings.trading_mode
     try:
+        if principal.user_id:
+            async with async_session() as session:
+                user_result = await session.execute(
+                    select(User).where(
+                        User.id == principal.user_id,
+                        User.is_active.is_(True),
+                    )
+                )
+                user = user_result.scalar_one_or_none()
+                if user is None:
+                    raise HTTPException(status_code=401, detail="Authentication required")
+                trading_mode = getattr(user, "trading_mode", settings.trading_mode)
         today = datetime.now(UTC).strftime("%Y-%m-%d")
         async with async_session() as session:
             result = await session.execute(select(DailyPnL).where(DailyPnL.date == today))
             record = result.scalar_one_or_none()
             daily_halted = bool(record and record.auto_trading_halted)
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.warning("Could not read daily halt status: %s", exc)
     return {
-        "trading_mode": settings.trading_mode,
+        "trading_mode": trading_mode,
         "auto_max_trade_usd": settings.auto_max_trade_usd,
         "auto_daily_loss_limit_usd": settings.auto_daily_loss_limit_usd,
         "auto_allowed_symbols": sorted(settings.auto_allowed_symbols_set),
@@ -391,13 +619,19 @@ async def download_report_pdf(report_id: str) -> FileResponse:
     dependencies=[Depends(require_allowed_ip), Depends(require_authenticated)],
     responses={500: {"description": "Database error"}},
 )
-async def list_trades(limit: int = 50) -> list[dict]:
+async def list_trades(request: Request, limit: int = 50) -> list[dict]:
     """List recent trades recorded in the database."""
+    principal = require_authenticated(request)
     limit = min(max(1, limit), 100)
+    user_filter = (
+        Trade.user_id == principal.user_id
+        if principal.user_id
+        else Trade.user_id.is_(None)
+    )
     try:
         async with async_session() as session:
             result = await session.execute(
-                select(Trade).order_by(Trade.created_at.desc()).limit(limit)
+                select(Trade).where(user_filter).order_by(Trade.created_at.desc()).limit(limit)
             )
             trades = result.scalars().all()
             return [
@@ -444,9 +678,29 @@ async def invoke_tool(request: Request) -> dict:
 
     tool_input = body.get("tool_input", {})
 
-    from src.tools.dispatcher import dispatch_tool
+    from src.tools.dispatcher import dispatch_tool, tool_context
 
-    result_json = await dispatch_tool(tool_name, tool_input)
+    trading_mode = None
+    if principal.user_id:
+        try:
+            async with async_session() as session:
+                user_result = await session.execute(
+                    select(User).where(
+                        User.id == principal.user_id,
+                        User.is_active.is_(True),
+                    )
+                )
+                user = user_result.scalar_one_or_none()
+                if user is None:
+                    raise HTTPException(status_code=401, detail="Authentication required")
+                trading_mode = getattr(user, "trading_mode", settings.trading_mode)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="User settings unavailable") from exc
+
+    with tool_context("api", principal.user_id, trading_mode):
+        result_json = await dispatch_tool(tool_name, tool_input)
     return {"result": result_json}
 
 

@@ -1,10 +1,10 @@
 """Small, dependency-free authentication layer for the private Pi UI.
 
-The application has one local operator rather than a multi-tenant identity
-system.  A salted scrypt password hash and an HMAC-signed, short-lived cookie
-are therefore sufficient and avoid adding another service to the Pi.  The
-session cookie contains no secrets or portfolio data; it is invalidated by
-changing ``AUTH_SESSION_SECRET`` and expires automatically.
+User accounts live in PostgreSQL. The environment credentials bootstrap the
+first account; additional accounts are provisioned with the local CLI. A
+salted scrypt password hash and an HMAC-signed, short-lived cookie avoid adding
+an identity service to the Pi. The cookie contains no portfolio data and is
+invalidated by changing ``AUTH_SESSION_SECRET``.
 """
 
 from __future__ import annotations
@@ -32,10 +32,11 @@ _failed_logins: dict[str, deque[float]] = defaultdict(deque)
 
 @dataclass(frozen=True)
 class Principal:
-    """Authenticated local operator or explicitly authorised MCP client."""
+    """Authenticated local user or explicitly authorised MCP client."""
 
     username: str
     mechanism: str = "cookie"
+    user_id: str | None = None
 
 
 def _b64(value: bytes) -> str:
@@ -87,12 +88,16 @@ def _secret() -> bytes:
     return config.settings.auth_session_secret.encode("utf-8")
 
 
-def create_session(username: str | None = None) -> str:
+def create_session(username: str | None = None, user_id: str | None = None) -> str:
     """Create an HMAC-signed session cookie value."""
     subject = username or config.settings.auth_username
     expires = int(time.time()) + max(5, config.settings.auth_session_ttl_minutes) * 60
     nonce = secrets.token_urlsafe(24)
-    payload = f"{subject}|{expires}|{nonce}"
+    payload = (
+        f"{user_id}|{subject}|{expires}|{nonce}"
+        if user_id
+        else f"{subject}|{expires}|{nonce}"
+    )
     signature = hmac.new(_secret(), payload.encode(), hashlib.sha256).digest()
     return f"{_b64(payload.encode())}.{_b64(signature)}"
 
@@ -108,14 +113,17 @@ def verify_session(token: str | None) -> Principal | None:
         expected = hmac.new(_secret(), payload_bytes, hashlib.sha256).digest()
         if not hmac.compare_digest(expected, _unb64(encoded_signature)):
             return None
-        username, expires_raw, nonce = payload_bytes.decode("utf-8").split("|", 2)
+        parts = payload_bytes.decode("utf-8").split("|")
+        if len(parts) != 4:
+            return None
+        user_id, username, expires_raw, nonce = parts
         if (
             not nonce
-            or username != config.settings.auth_username
             or int(expires_raw) <= int(time.time())
+            or not user_id
         ):
             return None
-        return Principal(username=username)
+        return Principal(username=username, user_id=user_id)
     except (TypeError, ValueError, UnicodeError):
         return None
 
@@ -140,7 +148,9 @@ def require_authenticated(request: Request) -> Principal:
     """FastAPI dependency for private browser routes."""
     if config.settings.is_development or not config.settings.auth_require_login:
         return Principal(
-            username=config.settings.auth_username or "development", mechanism="development"
+            username=config.settings.auth_username or "development",
+            mechanism="development",
+            user_id=None,
         )
     if not config.settings.authentication_ready:
         raise HTTPException(status_code=503, detail="Authentication is not configured")
@@ -173,7 +183,7 @@ def require_mcp_or_browser(request: Request) -> Principal:
             scheme.lower() == "bearer"
             and hmac.compare_digest(token, config.settings.mcp_auth_token)
         ):
-            return Principal(username="mcp", mechanism="bearer")
+            return Principal(username="mcp", mechanism="bearer", user_id=None)
     return require_authenticated(request)
 
 
@@ -181,7 +191,9 @@ def websocket_principal(websocket: WebSocket) -> Principal | None:
     """Authenticate a WebSocket using the same session cookie as HTTP."""
     if config.settings.is_development or not config.settings.auth_require_login:
         return Principal(
-            username=config.settings.auth_username or "development", mechanism="development"
+            username=config.settings.auth_username or "development",
+            mechanism="development",
+            user_id=None,
         )
     if not config.settings.authentication_ready:
         return None

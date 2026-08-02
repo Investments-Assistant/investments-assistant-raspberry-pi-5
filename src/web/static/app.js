@@ -1,7 +1,9 @@
 /* Investment Assistant – WebSocket Chat Client */
 
-const SESSION_ID = localStorage.getItem('session_id') || crypto.randomUUID();
-localStorage.setItem('session_id', SESSION_ID);
+// Keep conversations tab-scoped. A shared localStorage ID made two tabs from
+// one browser append to the same in-memory model context and chat history.
+const SESSION_ID = sessionStorage.getItem('session_id') || crypto.randomUUID();
+sessionStorage.setItem('session_id', SESSION_ID);
 
 let ws = null;
 let currentAssistantBubble = null;
@@ -78,6 +80,17 @@ function appendUserMessage(text) {
   div.innerHTML = `
     <div class="msg-bubble">${escapeHtml(text)}</div>
     <div class="msg-time">${timeNow()}</div>
+  `;
+  messagesEl().appendChild(div);
+  scrollBottom();
+}
+
+function appendAssistantMessage(text, createdAt = null) {
+  const div = document.createElement('div');
+  div.className = 'msg assistant';
+  div.innerHTML = `
+    <div class="msg-bubble">${markdownToHtml(text)}</div>
+    <div class="msg-time">${formatMessageTime(createdAt)}</div>
   `;
   messagesEl().appendChild(div);
   scrollBottom();
@@ -181,18 +194,30 @@ function handleKey(e) {
 // ── Trading Mode ──────────────────────────────────────────────────────────────
 
 async function setMode(mode) {
-  document.getElementById('btn-recommend').classList.toggle('active', mode === 'recommend');
-  document.getElementById('btn-auto').classList.toggle('active', mode === 'auto');
   const statusEl = document.getElementById('mode-status');
-  statusEl.textContent = mode === 'auto'
-    ? '⚡ Auto mode — only bounded, configured trades can execute.'
-    : '✋ Recommend mode — agent proposes, you confirm.';
-
-  if (ws?.readyState === WebSocket.OPEN) {
-    setSendEnabled(false);
-    appendUserMessage(`Switch trading mode to ${mode}`);
-    startAssistantMessage();
-    ws.send(JSON.stringify({ message: `Switch trading mode to ${mode}` }));
+  statusEl.textContent = 'Saving trading mode…';
+  try {
+    const resp = await fetch('/api/profile/trading-mode', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrfToken(),
+      },
+      body: JSON.stringify({ mode }),
+    });
+    if (resp.status === 401) { window.location.assign('/login'); return; }
+    if (!resp.ok) {
+      const detail = await resp.json().catch(() => ({}));
+      throw new Error(detail.detail || 'Trading mode could not be saved.');
+    }
+    document.getElementById('btn-recommend').classList.toggle('active', mode === 'recommend');
+    document.getElementById('btn-auto').classList.toggle('active', mode === 'auto');
+    statusEl.textContent = mode === 'auto'
+      ? '⚡ Auto mode — only bounded, configured trades can execute.'
+      : '✋ Recommend mode — agent proposes, you confirm.';
+  } catch (error) {
+    statusEl.textContent = error.message;
+    appendErrorMessage(error.message);
   }
 }
 
@@ -265,6 +290,98 @@ async function activateKillSwitch() {
   }
 }
 
+// ── Durable user experience ─────────────────────────────────────────────────
+
+async function loadProfile() {
+  const statusEl = document.getElementById('profile-status');
+  try {
+    const resp = await fetch('/api/profile');
+    if (resp.status === 401) { window.location.assign('/login'); return; }
+    if (!resp.ok) throw new Error('Profile unavailable');
+    const profile = await resp.json();
+    document.getElementById('profile-display-name').value = profile.display_name || '';
+    document.getElementById('profile-description').value = profile.description || '';
+    document.getElementById('profile-preferences').value = JSON.stringify(
+      profile.preferences || {}, null, 2
+    );
+    statusEl.textContent = 'Profile loaded';
+    statusEl.className = 'profile-status saved';
+  } catch (error) {
+    console.error('Profile load failed', error);
+    statusEl.textContent = 'Profile could not be loaded.';
+    statusEl.className = 'profile-status error';
+  }
+}
+
+async function saveProfile() {
+  const statusEl = document.getElementById('profile-status');
+  let preferences;
+  try {
+    preferences = JSON.parse(document.getElementById('profile-preferences').value || '{}');
+  } catch (_) {
+    statusEl.textContent = 'Preferences must be valid JSON.';
+    statusEl.className = 'profile-status error';
+    return;
+  }
+  if (!preferences || Array.isArray(preferences) || typeof preferences !== 'object') {
+    statusEl.textContent = 'Preferences must be a JSON object.';
+    statusEl.className = 'profile-status error';
+    return;
+  }
+  statusEl.textContent = 'Saving…';
+  statusEl.className = 'profile-status';
+  try {
+    const resp = await fetch('/api/profile', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrfToken(),
+      },
+      body: JSON.stringify({
+        display_name: document.getElementById('profile-display-name').value,
+        description: document.getElementById('profile-description').value,
+        preferences,
+      }),
+    });
+    if (resp.status === 401) { window.location.assign('/login'); return; }
+    if (!resp.ok) {
+      const detail = await resp.json().catch(() => ({}));
+      throw new Error(detail.detail || 'Profile could not be saved.');
+    }
+    const saved = await resp.json();
+    document.getElementById('profile-preferences').value = JSON.stringify(
+      saved.preferences || {}, null, 2
+    );
+    statusEl.textContent = 'Profile saved';
+    statusEl.className = 'profile-status saved';
+  } catch (error) {
+    console.error('Profile save failed', error);
+    statusEl.textContent = error.message;
+    statusEl.className = 'profile-status error';
+  }
+}
+
+async function loadHistory() {
+  try {
+    const resp = await fetch(
+      `/api/chat/history?session_id=${encodeURIComponent(SESSION_ID)}&limit=200`
+    );
+    if (resp.status === 401) { window.location.assign('/login'); return false; }
+    if (!resp.ok) throw new Error('History unavailable');
+    const history = await resp.json();
+    if (!Array.isArray(history) || history.length === 0) return false;
+    messagesEl().replaceChildren();
+    for (const message of history) {
+      if (message.role === 'user') appendUserMessage(message.content);
+      if (message.role === 'assistant') appendAssistantMessage(message.content, message.created_at);
+    }
+    return true;
+  } catch (error) {
+    console.error('Chat history load failed', error);
+    return false;
+  }
+}
+
 async function loadReports() {
   const el = document.getElementById('reports-list');
   try {
@@ -304,6 +421,12 @@ function setStatus(state) {
 }
 function timeNow() {
   return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+function formatMessageTime(value) {
+  const date = value ? new Date(value) : new Date();
+  return Number.isNaN(date.getTime())
+    ? timeNow()
+    : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 function escapeHtml(str) {
   return String(str).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
@@ -368,7 +491,9 @@ function toggleSidebar() {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
-globalThis.addEventListener('DOMContentLoaded', () => {
+globalThis.addEventListener('DOMContentLoaded', async () => {
+  const hadHistory = await loadHistory();
+  await loadProfile();
   connect();
   loadSnapshot();
   loadSafety();
@@ -376,18 +501,11 @@ globalThis.addEventListener('DOMContentLoaded', () => {
   setInterval(loadSnapshot, 5 * 60 * 1000); // auto-refresh every 5 min
   setSendEnabled(true);
 
-  // Welcome message
-  const welcome = document.createElement('div');
-  welcome.className = 'msg assistant';
-  welcome.innerHTML = `
-    <div class="msg-bubble">
-      <strong>Welcome to your Investment Assistant! 📈</strong><br><br>
-      I have access to real-time market data, news sentiment analysis, and your connected brokerage accounts
-      (Alpaca, Interactive Brokers, Coinbase, Binance).<br><br>
-      I can analyse markets, run simulations, and — depending on your trading mode — <em>execute trades</em> on your behalf.<br><br>
-      Use the quick-prompt buttons on the left, or just ask me anything.
-    </div>
-    <div class="msg-time">${timeNow()}</div>
-  `;
-  messagesEl().appendChild(welcome);
+  if (!hadHistory) {
+    appendAssistantMessage(
+      '**Welcome to your Investment Assistant! 📈**\n\n'
+      + 'I can analyse markets, news, simulations, and — depending on your trading mode — execute bounded trades on your behalf.\n\n'
+      + 'Use the quick prompts on the left, or ask me anything.'
+    );
+  }
 });

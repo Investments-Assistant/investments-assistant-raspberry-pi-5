@@ -33,7 +33,7 @@ class TestSignedSessions:
             cfg.auth_username = "admin"
             cfg.auth_password_hash = "configured"
             cfg.auth_session_ttl_minutes = 10
-            token = create_session("admin")
+            token = create_session("admin", "user-admin")
             assert verify_session(token).username == "admin"
             assert verify_session(token + "tampered") is None
 
@@ -43,5 +43,5 @@ class TestSignedSessions:
             cfg.auth_username = "admin"
             cfg.auth_password_hash = "configured"
             cfg.auth_session_ttl_minutes = 10
-            token = create_session("other")
+            token = create_session("other", "")
             assert verify_session(token) is None

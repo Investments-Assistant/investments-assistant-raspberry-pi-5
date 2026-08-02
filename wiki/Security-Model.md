@@ -145,6 +145,20 @@ matching the request host. Failed logins are throttled per source IP.
 
 `scripts/pi_deploy.sh` refuses to deploy when authentication is missing or disabled.
 
+The configured environment account is only the bootstrap account. Additional local users are
+created with `scripts/create_user.py`, which stores an independent scrypt hash in PostgreSQL.
+The signed session payload contains the authenticated database user ID; chat history, trade
+audit rows, and explicit trade confirmations are checked against both that ID and the
+conversation ID. The browser stores conversation IDs in `sessionStorage`, so two tabs do not
+accidentally share a model context. Profile text and JSON preferences are bounded before they
+are persisted and are treated as untrusted context by the model.
+
+Trading mode is stored per user and the dispatcher reads it from the authenticated context;
+changing one user's mode cannot silently change another user's mode. Broker credentials are
+still process-wide environment configuration, so a deployment with one `.env` represents a
+shared household brokerage account. Separate financial owners require separate deployments or
+a future encrypted per-user credential vault.
+
 ---
 
 ## Secret management

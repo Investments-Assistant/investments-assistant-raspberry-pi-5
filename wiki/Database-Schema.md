@@ -37,9 +37,9 @@ handles the case where PostgreSQL has closed an idle connection (e.g. after the 
 container restarted). Without it, the first request after an idle period would fail with
 a broken pipe error.
 
-`pool_size=5` is appropriate for a single-user server. The Pi's `asyncpg` concurrency
-ceiling is effectively the number of CPU cores (4) for CPU-bound work; 5 connections
-ensures there's always one available.
+`pool_size=5` is appropriate for a small two-user server. Database I/O is asynchronous, but
+the Pi's CPU-bound model inference is deliberately serialized separately; the pool must not
+be mistaken for permission to run multiple 7B model copies.
 
 ---
 
@@ -52,6 +52,7 @@ One row per turn in a conversation.
 | Column | Type | Notes |
 | --- | --- | --- |
 | `id` | UUID (string) | Primary key, `uuid4()` |
+| `user_id` | String(36) | Indexed owner; nullable only for legacy/system rows |
 | `session_id` | String(36) | Indexed — used for history queries |
 | `role` | String(16) | `user`, `assistant`, or `tool` |
 | `content` | Text | The message text |
@@ -67,6 +68,30 @@ the `INSERT`.
 `SELECT * FROM chat_messages WHERE session_id = ? ORDER BY created_at LIMIT 15`.
 Without the index, this would be a full table scan.
 
+History queries use `(user_id, session_id, created_at)` and never trust a browser-supplied
+session ID as an ownership boundary by itself.
+
+### `users`
+
+One local account per person allowed onto the VPN application.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | UUID (string) | Signed into the browser session cookie |
+| `username` | String(128) | Unique login ID |
+| `password_hash` | String(256) | scrypt output; clear text is never stored |
+| `display_name` | String(128) | UI/profile name |
+| `description` | Text | User-provided goals, experience, and constraints |
+| `preferences` | JSON | Bounded structured preferences injected as context, not instructions |
+| `trading_mode` | String(16) | Per-user `recommend` or `auto` policy |
+| `is_active` | Boolean | Local account disable switch |
+| `created_at`, `updated_at` | DateTime(tz) | Audit timestamps |
+
+The environment account is bootstrapped during startup so existing deployments have a stable
+owner. `scripts/create_user.py` provisions additional accounts. Startup applies additive
+PostgreSQL changes for `user_id` and assigns legacy NULL chat/trade rows to the bootstrap
+account; it does not reassign later users' rows.
+
 ---
 
 ### `trades`
@@ -76,6 +101,7 @@ One row per order submitted or recommended.
 | Column | Type | Notes |
 | --- | --- | --- |
 | `id` | UUID | Primary key |
+| `user_id` | String(36) | Indexed owner; legacy NULL rows are migrated to the bootstrap user |
 | `broker` | String(32) | `alpaca`, `ibkr`, `coinbase`, `binance` |
 | `symbol` | String(20) | Ticker |
 | `side` | String(8) | `buy` or `sell` |

@@ -37,7 +37,8 @@ decides *what* to fetch based on the question, avoiding noise from irrelevant da
 
 ## Orchestrator (`src/agent/orchestrator.py`)
 
-The `InvestmentsAssistantOrchestrator` class manages one chat session. It:
+The `InvestmentsAssistantOrchestrator` class manages one `(authenticated user, chat session)`.
+It:
 
 1. Holds an in-memory `history` list of `{"role": ..., "content": ...}` dicts
 2. Trims history to the last `settings.agent_max_context_messages` turns before each LLM call
@@ -47,14 +48,24 @@ The `InvestmentsAssistantOrchestrator` class manages one chat session. It:
 6. Persists both the user and assistant messages to PostgreSQL (best-effort — errors are
    logged but never raised, so a DB outage doesn't break the chat)
 
-**Session registry**: a module-level `_sessions: dict[str, Orchestrator]` dict maps
-`session_id` → `Orchestrator`. Sessions are created on first WebSocket connection and
+**Session registry**: a module-level `_sessions: dict[(user_id, session_id), Orchestrator]`
+dict maps the authenticated owner and conversation ID to an orchestrator. Sessions are created on first WebSocket connection and
 are bounded to 128 in-memory objects. Older objects are evicted if a VPN client rotates
 IDs; durable history remains in PostgreSQL and is restored on reconnect.
 
 **History restoration**: on WebSocket connect, `load_history_from_db()` queries
-`chat_messages` ordered by `created_at` and rebuilds the in-memory history. This means
-a browser refresh or reconnect picks up where the conversation left off.
+`chat_messages` filtered by both `user_id` and `session_id`, ordered by `created_at`, and
+rebuilds the in-memory history. This means a browser refresh or reconnect picks up where the
+conversation left off without exposing another user's messages.
+
+Before every turn, the profile description and JSON preferences are refreshed from the `users`
+row and added inside a delimited context block. The model is explicitly told that this is
+user-provided context, not a command, so preferences cannot override server-side trading
+limits or confirmation requirements.
+
+Trading mode is part of the authenticated user context. The `set_trading_mode` tool persists
+the requesting user's mode; it no longer mutates the process-global setting used as the
+scheduler/default fallback.
 
 ---
 

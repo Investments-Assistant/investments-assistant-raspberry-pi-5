@@ -23,6 +23,15 @@
       <button class="kill-switch" onclick="activateKillSwitch()">Halt auto-trading today</button>
     </div>
 
+    <div class="sidebar-section profile-section">
+      <div class="section-title">Your Assistant Profile</div>
+      <input id="profile-display-name" class="profile-input" placeholder="Display name" maxlength="128" />
+      <textarea id="profile-description" class="profile-input" rows="3" maxlength="4000" placeholder="Describe your goals, experience, and constraints…"></textarea>
+      <textarea id="profile-preferences" class="profile-input profile-json" rows="5" placeholder='{"risk_tolerance":"moderate","base_currency":"EUR"}'></textarea>
+      <button class="profile-save" onclick="saveProfile()">Save profile</button>
+      <div id="profile-status" class="profile-status"></div>
+    </div>
+
     <div class="sidebar-section">
       <div class="section-title">Market Snapshot</div>
       <div id="market-snapshot" class="market-snapshot">Loading…</div>

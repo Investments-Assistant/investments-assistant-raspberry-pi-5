@@ -21,6 +21,9 @@ via `llama-cpp-python`. No external AI API or model sidecar is used.
   executes within configurable safety limits)
 - **Authenticated chat UI** — FastAPI + WebSocket with ID/password login, signed sessions,
   CSRF protection, origin checks, and VPN-only access
+- **Multi-user persistence** — PostgreSQL-backed local accounts, per-user chat history,
+  profile descriptions, JSON preferences, session isolation, and tab-scoped conversations;
+  add accounts with `scripts/create_user.py`
 - **Scheduled evidence reviews** — market data refreshed every 5 min, news ingested hourly,
   and an hourly local review that records findings; execution remains server-guarded
 - **Weekly reports** — HTML + PDF with auditable data, assumptions, risks, and decisions
@@ -67,7 +70,8 @@ via `llama-cpp-python`. No external AI API or model sidecar is used.
 │  │                          ┌───────▼──────────┐   │ /api/tools/   │  │   │
 │  │                          │  Orchestrator    │   │   invoke      │  │   │
 │  │                          │  (per session)   │   └───────────────┘  │   │
-│  │                          │  • history[40]   │                      │   │
+│  │                          │  • user + session│                      │   │
+│  │                          │    isolated      │                      │   │
 │  │                          │  • system prompt │                      │   │
 │  │                          └───────┬──────────┘                      │   │
 │  │                                  │                                  │   │
@@ -108,7 +112,8 @@ via `llama-cpp-python`. No external AI API or model sidecar is used.
 │                                            │  │ gen_report     │  │   │   │
 │  ┌────────────────┐                         │  │ set_mode       │  │   │   │
 │  │  PostgreSQL    │                         │  └────────────────┘  │   │   │
-│  │  chat history  │                         └──────────────────────┘   │   │
+│  │  users +       │                         └──────────────────────┘   │   │
+│  │  chat history  │                                                    │   │
 │  │  trades        │                                                    │   │
 │  │  reports       │                                                    │   │
 │  └────────────────┘                                                    │   │
@@ -140,7 +145,9 @@ User types message
        │
        ▼
   Orchestrator.chat()
-  • appends user message to history
+  • resolves authenticated (user_id, session_id)
+  • refreshes the user's durable profile
+  • appends user message to isolated history
   • passes history + system prompt to LLM
        │
        ▼
@@ -154,6 +161,33 @@ User types message
        └─ finish_reason == "stop" ──► response events streamed to browser
                                    ──► persisted to PostgreSQL
 ```
+
+### Multi-user and persistence behavior
+
+Each login receives a signed cookie containing the local PostgreSQL user ID. The
+orchestrator registry is keyed by `(user_id, session_id)`, so identical browser-generated
+session IDs cannot cross user boundaries. The browser keeps the conversation ID in
+`sessionStorage`, which gives each tab its own conversation while allowing a refresh in that
+tab to restore the same history. Chat turns and trade audit rows are filtered by user ID.
+Trading mode is also persisted per user, so one person switching Recommend/Auto does not
+change another person's chat policy.
+
+The Pi intentionally loads one Qwen model and serializes model inference with a lock. Two
+users can stay connected and their database/network work remains asynchronous, but their CPU
+inference turns queue behind one another. The expected degradation under two simultaneous
+model requests is response latency, not shared conversation context or cross-user tool
+confirmation. Do not remove this lock or run two 7B copies on an 8 GB Pi without a measured
+memory and safety review.
+
+The local PostgreSQL database is the persistence system. AWS Free Tier quotas, account plans,
+regions, data transfer, and service overages vary, and Budgets notifications are alerts rather
+than a hard spend firewall. Keeping history and profiles on the Pi is private and has no cloud
+bill.
+
+Broker credentials and portfolio adapters remain process-wide configuration. This deployment
+therefore models a shared household brokerage account with separate operator identities, not
+two independent broker accounts. Do not put separate people's broker credentials in one shared
+`.env`; that requires a future encrypted per-user broker-vault design.
 
 ### Scheduled jobs
 
@@ -194,7 +228,9 @@ investments-assistant/
 │
 ├── scripts/
 │   ├── setup.sh                      # automated Pi 5 setup (Docker, WireGuard, firewall)
-│   └── download_model.py             # download GGUF models from HuggingFace
+│   ├── download_model.py             # download GGUF models from HuggingFace
+│   ├── create_auth_hash.py           # generate bootstrap login material
+│   └── create_user.py                # provision additional local users
 │
 └── src/
     ├── app.py                        # FastAPI application entry point
@@ -222,7 +258,7 @@ investments-assistant/
     │
     ├── db/
     │   ├── database.py               # SQLAlchemy async engine
-    │   └── models.py                 # ChatMessage, Trade, Analysis, Report, etc.
+    │   └── models.py                 # User, ChatMessage, Trade, Analysis, Report, etc.
     │
     ├── scheduler/
     │   ├── jobs.py                   # APScheduler jobs
@@ -286,7 +322,10 @@ Everything else is blocked at four layers:
 4. **FastAPI `is_ip_allowed()` + signed session** — in-process VPN and identity checks;
    state-changing browser requests also require CSRF validation
 
-Generate the password hash and session secret with `scripts/create_auth_hash.py`.
+Generate the bootstrap password hash and session secret with `scripts/create_auth_hash.py`.
+The configured `AUTH_USERNAME` account is created in PostgreSQL on startup. Create any
+additional local VPN users with `python3 scripts/create_user.py`; public self-registration
+is intentionally not exposed.
 See [config/wireguard/setup.md](config/wireguard/setup.md) for the VPN setup.
 
 ---
@@ -324,7 +363,7 @@ Key groups:
 | --- | --- |
 | LLM | `LLM_MODEL_PATH`, `LLM_CONTEXT_SIZE`, `LLM_N_THREADS`, `AGENT_MAX_TOKENS` |
 | Trading | `TRADING_MODE`, `AUTO_MAX_TRADE_USD`, `AUTO_DAILY_LOSS_LIMIT_USD`, `LIVE_TRADING_ENABLED` |
-| Security | `ALLOWED_IPS`, `AUTH_USERNAME`, `AUTH_PASSWORD_HASH`, `AUTH_SESSION_SECRET` |
+| Security | `ALLOWED_IPS`, `AUTH_USERNAME`, `AUTH_PASSWORD_HASH`, `AUTH_SESSION_SECRET`, `AUTH_SESSION_TTL_MINUTES` |
 | Database | `POSTGRES_PASSWORD` |
 | Brokers | `ALPACA_API_KEY`, `COINBASE_API_KEY`, `BINANCE_API_KEY`, `IBKR_ENABLED` |
 | News | RSS/HTML by default; optional `NEWS_API_ADAPTERS_ENABLED`, `NEWSAPI_KEY`, `GUARDIAN_API_KEY` |

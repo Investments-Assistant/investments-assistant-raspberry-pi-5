@@ -19,7 +19,7 @@ or HuggingFace transformers backend.
 
 | Model key | Approx size | Use |
 | --- | ---: | --- |
-| `qwen2.5-7b` | 4.7 GB | Best quality/speed trade-off on an 8 GB Pi 5 |
+| `qwen2.5-7b` | 4.7 GB | Stable tool-calling quality/speed trade-off on an 8 GB Pi 5 |
 | `qwen2.5-3b` | 3.3 GB | More memory headroom, faster responses |
 | `llama3.2-3b` | 3.4 GB | Lightweight fallback |
 | `mistral-7b` | 4.4 GB | Solid general model |
@@ -57,3 +57,21 @@ The selected GGUF must include a tool-aware chat template. If the model emits
 plain text instead of structured tool calls, inspect its template metadata or
 choose a model with native function-calling support; do not let the assistant
 execute trades through text parsing.
+
+## Current model decision (August 2026)
+
+The repository remains on Qwen2.5-7B-Instruct Q4_K_M. The reason is runtime compatibility,
+not a claim that it wins every general benchmark: the current llama.cpp function-calling
+path explicitly supports Qwen 2.5 templates, and the existing Pi deployment already budgets
+for its quantized memory footprint. The server-side safety layer remains authoritative even
+when the model is wrong.
+
+Qwen3.5-4B is a promising future candidate with strong official reasoning/tool-use results,
+but its documented serving examples use Qwen-specific SGLang/vLLM parsers rather than the
+current in-process llama.cpp path. It must pass a Pi A/B test for tool-call validity, latency,
+RAM, and refusal/safety cases before migration. Phi-4-mini is lighter, but its official card
+reports weaker MMLU/MMLU-Pro comparisons against Qwen2.5-7B and warns that function calling
+can hallucinate names or URLs. Fine-tuning is not currently justified: fresh prices, news,
+portfolio state, and deterministic server guards are more valuable than memorizing historical
+investment text. If fine-tuning is later attempted, train off-device and require held-out
+tool-call and risk-control tests before exporting a GGUF.

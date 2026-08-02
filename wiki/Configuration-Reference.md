@@ -32,7 +32,7 @@ In `development` mode:
 | --- | --- | --- | --- |
 | `ALLOWED_IPS` | comma-separated CIDRs | `10.8.0.0/24` | IP ranges allowed to access the app |
 | `TRUST_PROXY_HEADERS` | bool | `true` | Trust the configured reverse proxy client-IP headers |
-| `AUTH_USERNAME` | string | `admin` | Local operator ID |
+| `AUTH_USERNAME` | string | `admin` | Bootstrap local login ID; additional users use `scripts/create_user.py` |
 | `AUTH_PASSWORD_HASH` | string | `""` | scrypt hash from `scripts/create_auth_hash.py` |
 | `AUTH_SESSION_SECRET` | string | `""` | Random signing secret for browser sessions |
 | `AUTH_SESSION_TTL_MINUTES` | integer | `480` | Signed session lifetime |
@@ -91,7 +91,7 @@ if the agent feels too repetitive.
 
 | Variable | Type | Default | Description |
 | --- | --- | --- | --- |
-| `TRADING_MODE` | `recommend` \| `auto` | `recommend` | Default trading mode on startup |
+| `TRADING_MODE` | `recommend` \| `auto` | `recommend` | Scheduler/bootstrap default; each local user's mode is stored in PostgreSQL |
 | `AUTO_MAX_TRADE_USD` | float | `500.0` | Maximum USD per single trade in auto mode |
 | `AUTO_DAILY_LOSS_LIMIT_USD` | float | `1000.0` | Maximum realized loss in a single day before auto-trading is halted |
 | `AUTO_ALLOWED_SYMBOLS` | comma-separated | `""` (all) | Symbols the agent can trade autonomously |

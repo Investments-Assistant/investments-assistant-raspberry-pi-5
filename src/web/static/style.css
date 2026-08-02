@@ -110,6 +110,25 @@ body {
 }
 .kill-switch:hover { background: rgba(153, 27, 27, 0.75); }
 
+/* Durable user profile */
+.profile-section { display: flex; flex-direction: column; gap: 6px; }
+.profile-input {
+  width: 100%; padding: 7px 8px; resize: vertical;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg-input); color: var(--text-main); font: inherit;
+  font-size: 0.75rem; line-height: 1.35;
+}
+.profile-input:focus { outline: none; border-color: var(--accent); }
+.profile-json { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.profile-save {
+  padding: 7px 8px; border: 1px solid var(--accent); border-radius: 6px;
+  background: var(--accent); color: #fff; cursor: pointer; font-size: 0.75rem;
+}
+.profile-save:hover { background: var(--accent-lit); }
+.profile-status { min-height: 1em; color: var(--text-muted); font-size: 0.7rem; }
+.profile-status.saved { color: var(--green); }
+.profile-status.error { color: var(--red); }
+
 /* Market snapshot */
 .market-snapshot {
   font-size: 0.78rem; line-height: 1.6;
